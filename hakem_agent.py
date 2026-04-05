@@ -1,7 +1,7 @@
 import os
 import requests
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_TOKEN = "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68"
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 
 def send_message(text):
