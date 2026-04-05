@@ -1,20 +1,127 @@
 import os
 import requests
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 TELEGRAM_TOKEN = "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68"
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
+POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "7A1Rlo0TESCjHDqDs5T2lrdStLgTgpRV")
 
 WATCHLIST = {
-    "Energy": ["XOM","CVX","OXY","SLB","HAL","MPC"],
-    "Materials": ["LIN","APD","CAT","DE","HON"],
-    "Communication": ["NFLX","META","GOOGL"],
-    "Staples": ["PEP","KO","WMT","COST"],
-    "Technology": ["NVDA","AAPL","MSFT","AMD"],
-    "Biotech": ["MRNA","NVAX","SAVA","ACAD","IONS","BEAM","RXRX","NTLA","CRSP","EDIT"]
+    "Energy": ["XOM", "CVX", "OXY", "SLB", "HAL", "MPC"],
+    "Materials": ["LIN", "APD", "CAT", "DE", "HON"],
+    "Communication": ["NFLX", "META", "GOOGL"],
+    "Staples": ["PEP", "KO", "WMT", "COST"],
+    "Technology": ["NVDA", "AAPL", "MSFT", "AMD"],
+    "Biotech": ["MRNA", "NVAX", "SAVA", "ACAD", "IONS", "BEAM", "RXRX", "NTLA", "CRSP", "EDIT"]
 }
+
+# ─────────────────────────────────────────
+# OPTIONS DATA — Massive (Polygon) API
+# ─────────────────────────────────────────
+
+def get_options_data(ticker, direction):
+    try:
+        contract_type = "call" if direction == "LONG" else "put"
+        today = datetime.now()
+        min_expiry = today + timedelta(days=14)
+        max_expiry = today + timedelta(days=45)
+
+        url = "https://api.polygon.io/v3/reference/options/contracts"
+        params = {
+            "underlying_ticker": ticker,
+            "contract_type": contract_type,
+            "expiration_date.gte": min_expiry.strftime("%Y-%m-%d"),
+            "expiration_date.lte": max_expiry.strftime("%Y-%m-%d"),
+            "limit": 50,
+            "sort": "expiration_date",
+            "apiKey": POLYGON_API_KEY
+        }
+
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+
+        if "results" not in data or not data["results"]:
+            return None
+
+        stock = yf.Ticker(ticker)
+        current_price = stock.fast_info.get("lastPrice") or stock.info.get("regularMarketPrice", 0)
+
+        if not current_price:
+            return None
+
+        best_contract = None
+        best_score = float("inf")
+
+        for contract in data["results"]:
+            strike = contract.get("strike_price", 0)
+            if not strike:
+                continue
+            diff = abs(strike - current_price) / current_price
+            if diff < best_score and diff <= 0.05:
+                best_score = diff
+                best_contract = contract
+
+        if not best_contract and data["results"]:
+            best_contract = min(
+                data["results"],
+                key=lambda c: abs(c.get("strike_price", 0) - current_price)
+            )
+
+        if not best_contract:
+            return None
+
+        ticker_symbol = best_contract.get("ticker", "")
+        expiry = best_contract.get("expiration_date", "")
+        strike = best_contract.get("strike_price", 0)
+
+        snapshot = get_option_snapshot(ticker_symbol)
+
+        return {
+            "type": contract_type.upper(),
+            "strike": strike,
+            "expiry": expiry,
+            "premium": snapshot.get("premium", 0),
+            "delta": snapshot.get("delta", 0),
+            "volume": snapshot.get("volume", 0),
+            "oi": snapshot.get("oi", 0),
+            "symbol": ticker_symbol
+        }
+
+    except Exception as e:
+        print(f"Options error {ticker}: {e}")
+        return None
+
+
+def get_option_snapshot(option_ticker):
+    try:
+        url = f"https://api.polygon.io/v3/snapshot/options/{option_ticker}"
+        params = {"apiKey": POLYGON_API_KEY}
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+
+        result = data.get("results", {})
+        if not result:
+            return {}
+
+        day = result.get("day", {})
+        greeks = result.get("greeks", {})
+
+        return {
+            "premium": round(day.get("close", 0) or day.get("last", 0), 2),
+            "delta": round(greeks.get("delta", 0), 3),
+            "volume": int(day.get("volume", 0)),
+            "oi": int(result.get("open_interest", 0))
+        }
+    except Exception as e:
+        print(f"Snapshot error {option_ticker}: {e}")
+        return {}
+
+
+# ─────────────────────────────────────────
+# MARKET CONDITIONS
+# ─────────────────────────────────────────
 
 def is_market_open():
     ny = pytz.timezone("America/New_York")
@@ -24,6 +131,7 @@ def is_market_open():
     market_open = now.replace(hour=9, minute=30, second=0)
     market_close = now.replace(hour=16, minute=0, second=0)
     return market_open <= now <= market_close
+
 
 def get_spy_regime():
     try:
@@ -35,12 +143,18 @@ def get_spy_regime():
     except:
         return "BULL"
 
+
+# ─────────────────────────────────────────
+# DATA & ANALYSIS
+# ─────────────────────────────────────────
+
 def get_data(ticker):
     try:
         df = yf.download(ticker, period="60d", interval="1d", progress=False)
         return df if len(df) >= 30 else None
     except:
         return None
+
 
 def analyze_biotech(ticker):
     df = get_data(ticker)
@@ -66,10 +180,14 @@ def analyze_biotech(ticker):
                 "t1": t1,
                 "t2": t2,
                 "rr": rr,
-                "reason": [f"Volume Spike {int(vol_now/vol_avg*100)}% من المتوسط", "احتمال خبر FDA قادم"],
+                "reason": [
+                    f"Volume Spike {int(vol_now/vol_avg*100)}% من المتوسط",
+                    "احتمال خبر FDA قادم"
+                ],
                 "confidence": 70
             }
     return None
+
 
 def analyze(ticker, sector, regime):
     df = get_data(ticker)
@@ -118,7 +236,7 @@ def analyze(ticker, sector, regime):
             reason.append(f"Breakout فوق {resistance:.2f}")
             reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
             confidence += 20
-        elif price > ma50_val and abs(price - ma20_val)/price < 0.01 and rsi_val < 45:
+        elif price > ma50_val and abs(price - ma20_val) / price < 0.01 and rsi_val < 45:
             direction = "LONG"
             reason.append("Pullback على MA20")
             reason.append(f"RSI {rsi_val:.0f} منطقة شراء")
@@ -173,7 +291,14 @@ def analyze(ticker, sector, regime):
         "confidence": confidence
     }
 
+
+# ─────────────────────────────────────────
+# TELEGRAM MESSAGE
+# ─────────────────────────────────────────
+
 def send_signal(s, regime):
+    opt = get_options_data(s["ticker"], s["direction"])
+
     msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
 🚨 HAKEM TRADE ALERT
 ━━━━━━━━━━━━━━━━━━━━━━━
@@ -184,23 +309,52 @@ def send_signal(s, regime):
 
 سبب الدخول:
 """
-    for r in s['reason']:
+    for r in s["reason"]:
         msg += f"• {r}\n"
 
     msg += f"""
-Entry: {s['price']}
-Stop: {s['stop']}
-T1: {s['t1']}
-T2: {s['t2']}
-R/R: 1:{s['rr']}
+Entry:  {s['price']}
+Stop:   {s['stop']}
+T1:     {s['t1']}
+T2:     {s['t2']}
+R/R:    1:{s['rr']}
+"""
 
+    if opt and opt.get("premium", 0) > 0:
+        delta_bar = "🟢" if opt["delta"] > 0.5 else "🟡" if opt["delta"] > 0.3 else "🔴"
+        msg += f"""
+━━━━━━━━━━━━━━━━━━━━━━━
+📊 OPTIONS PLAY
+━━━━━━━━━━━━━━━━━━━━━━━
+النوع:    {opt['type']}
+Strike:   ${opt['strike']}
+Expiry:   {opt['expiry']}
+Premium:  ${opt['premium']}
+Delta:    {opt['delta']} {delta_bar}
+Volume:   {opt['volume']:,}
+OI:       {opt['oi']:,}
+"""
+    else:
+        msg += """
+━━━━━━━━━━━━━━━━━━━━━━━
+📊 OPTIONS
+⚠️ لا تتوفر بيانات Options حالياً
+"""
+
+    msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━
 ⭐ Confidence: {s['confidence']}/100
-━━━━━━━━━━━━━━━━━━━━━━━"""
+━━━━━━━━━━━━━━━━━━━━━━━
+📡 HAKEM CONSULTING"""
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     result = requests.post(url, json={"chat_id": CHAT_ID, "text": msg}).json()
     print(result)
+
+
+# ─────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────
 
 def run():
     if not is_market_open():
@@ -220,7 +374,7 @@ def run():
                 else:
                     signal = analyze(ticker, sector, regime)
                 if signal:
-                    if best is None or signal['confidence'] > best['confidence']:
+                    if best is None or signal["confidence"] > best["confidence"]:
                         best = signal
             except Exception as e:
                 print(f"Error {ticker}: {e}")
@@ -229,6 +383,7 @@ def run():
         send_signal(best, regime)
     else:
         print("No signals found")
+
 
 if __name__ == "__main__":
     run()
