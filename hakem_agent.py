@@ -1,10 +1,11 @@
 import os
 import requests
 import yfinance as yf
+import numpy as np
 from datetime import datetime, timedelta
 import pytz
 
-TELEGRAM_TOKEN = "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "7A1Rlo0TESCjHDqDs5T2lrdStLgTgpRV")
 
@@ -25,120 +26,8 @@ WATCHLIST = {
 }
 
 # ─────────────────────────────────────────
-# ACTION DECISION
+# OPTIONS DATA
 # ─────────────────────────────────────────
-
-def get_action(signal, opt):
-    score = 0
-    reasons = []
-
-    # 1) Confidence
-    if signal["confidence"] >= 85:
-        score += 1
-    else:
-        reasons.append("Confidence دون 85")
-
-    # 2) R/R
-    if signal["rr"] >= 2.0:
-        score += 1
-    else:
-        reasons.append("R/R دون 1:2")
-
-    # 3) Options
-    if opt and opt.get("premium", 0) > 0:
-        delta = abs(opt.get("delta", 0))
-        iv = opt.get("iv", 0)
-        oi = opt.get("oi", 0)
-        spread = opt.get("ask", 0) - opt.get("bid", 0)
-        premium = opt.get("premium", 0)
-
-        opt_ok = (
-            0.40 <= delta <= 0.55
-            and iv < 0.60
-            and oi >= 500
-            and spread <= premium * 0.10
-        )
-        if opt_ok:
-            score += 1
-        else:
-            reasons.append("Options لا تطابق المعايير المثالية")
-    else:
-        reasons.append("لا توجد بيانات Options")
-
-    if score == 3:
-        return "🚀 ACTION: ENTER NOW", None
-    elif score == 2:
-        return "⚡ ACTION: CONSIDER", reasons
-    else:
-        return "⚠️ ACTION: WAIT", reasons
-
-
-# ─────────────────────────────────────────
-# OPTIONS SELECTION — HAKEM Rules
-# ─────────────────────────────────────────
-
-def score_contract(contract, snapshot, current_price, direction):
-    delta = snapshot.get("delta", 0)
-    premium = snapshot.get("premium", 0)
-    volume = snapshot.get("volume", 0)
-    oi = snapshot.get("oi", 0)
-    bid = snapshot.get("bid", 0)
-    ask = snapshot.get("ask", 0)
-    iv = snapshot.get("iv", 0)
-    strike = contract.get("strike_price", 0)
-    expiry_str = contract.get("expiration_date", "")
-
-    try:
-        expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d")
-        dte = (expiry_date - datetime.now()).days
-    except:
-        return None
-
-    if direction == "LONG":
-        if not (0.35 <= delta <= 0.60):
-            return None
-    else:
-        if not (-0.60 <= delta <= -0.35):
-            return None
-
-    if not (15 <= dte <= 35):
-        return None
-
-    if current_price > 0:
-        strike_diff = abs(strike - current_price) / current_price
-        if strike_diff > 0.05:
-            return None
-    else:
-        strike_diff = 0
-
-    if oi < 100:
-        return None
-    if volume < 10:
-        return None
-
-    if bid > 0 and ask > 0:
-        spread_pct = (ask - bid) / ask
-        if spread_pct > 0.15:
-            return None
-    else:
-        spread_pct = 0
-
-    if premium <= 0:
-        return None
-    if iv > 1.0:
-        return None
-
-    score = 0
-    score += (1 - abs(abs(delta) - 0.45)) * 30
-    score += (1 - abs(dte - 25) / 25) * 20
-    score += (1 - strike_diff) * 20
-    score += min(oi / 1000, 1) * 15
-    score += min(volume / 500, 1) * 10
-    if bid > 0 and ask > 0:
-        score += (1 - spread_pct) * 5
-
-    return round(score, 2)
-
 
 def get_options_data(ticker, direction):
     try:
@@ -207,12 +96,67 @@ def get_options_data(ticker, direction):
             "iv": best_snapshot.get("iv", 0),
             "bid": best_snapshot.get("bid", 0),
             "ask": best_snapshot.get("ask", 0),
-            "symbol": best_contract.get("ticker", "")
         }
 
     except Exception as e:
         print(f"Options error {ticker}: {e}")
         return None
+
+
+def score_contract(contract, snapshot, current_price, direction):
+    delta = snapshot.get("delta", 0)
+    premium = snapshot.get("premium", 0)
+    volume = snapshot.get("volume", 0)
+    oi = snapshot.get("oi", 0)
+    bid = snapshot.get("bid", 0)
+    ask = snapshot.get("ask", 0)
+    iv = snapshot.get("iv", 0)
+    strike = contract.get("strike_price", 0)
+    expiry_str = contract.get("expiration_date", "")
+
+    try:
+        expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d")
+        dte = (expiry_date - datetime.now()).days
+    except:
+        return None
+
+    if direction == "LONG":
+        if not (0.35 <= delta <= 0.60):
+            return None
+    else:
+        if not (-0.60 <= delta <= -0.35):
+            return None
+
+    if not (15 <= dte <= 35):
+        return None
+
+    if current_price > 0:
+        strike_diff = abs(strike - current_price) / current_price
+        if strike_diff > 0.05:
+            return None
+    else:
+        strike_diff = 0
+
+    if oi < 100 or volume < 10 or premium <= 0 or iv > 1.0:
+        return None
+
+    if bid > 0 and ask > 0:
+        spread_pct = (ask - bid) / ask
+        if spread_pct > 0.15:
+            return None
+    else:
+        spread_pct = 0
+
+    score = 0
+    score += (1 - abs(abs(delta) - 0.45)) * 30
+    score += (1 - abs(dte - 25) / 25) * 20
+    score += (1 - strike_diff) * 20
+    score += min(oi / 1000, 1) * 15
+    score += min(volume / 500, 1) * 10
+    if bid > 0 and ask > 0:
+        score += (1 - spread_pct) * 5
+
+    return round(score, 2)
 
 
 def get_option_snapshot(option_ticker):
@@ -221,14 +165,11 @@ def get_option_snapshot(option_ticker):
         params = {"apiKey": POLYGON_API_KEY}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-
         result = data.get("results", {})
         if not result:
             return {}
-
         day = result.get("day", {})
         greeks = result.get("greeks", {})
-
         return {
             "premium": round(day.get("close", 0) or day.get("last", 0), 2),
             "delta": round(greeks.get("delta", 0), 3),
@@ -238,8 +179,7 @@ def get_option_snapshot(option_ticker):
             "bid": round(day.get("open", 0), 2),
             "ask": round(day.get("close", 0), 2),
         }
-    except Exception as e:
-        print(f"Snapshot error {option_ticker}: {e}")
+    except:
         return {}
 
 
@@ -257,66 +197,346 @@ def is_market_open():
     return market_open <= now <= market_close
 
 
-def get_spy_regime():
+def get_market_state():
     try:
-        df = yf.download("SPY", period="30d", interval="1d", progress=False)
+        df = yf.download("SPY", period="60d", interval="1d", progress=False)
+        if df is None or len(df) < 20:
+            return "CALM", "BULL"
         close = df["Close"]
+        high = df["High"]
+        low = df["Low"]
+        tr = np.maximum(high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1))))
+        atr = float(tr.rolling(14).mean().iloc[-1])
+        atr_pct = atr / float(close.iloc[-1])
+        state = "CALM" if atr_pct < 0.012 else "VOLATILE"
         ma20 = float(close.rolling(20).mean().iloc[-1])
         price = float(close.iloc[-1])
-        return "BULL" if price > ma20 else "BEAR"
+        regime = "BULL" if price > ma20 else "BEAR"
+        return state, regime
     except:
-        return "BULL"
+        return "CALM", "BULL"
 
-
-# ─────────────────────────────────────────
-# DATA & ANALYSIS
-# ─────────────────────────────────────────
 
 def get_data(ticker):
     try:
-        df = yf.download(ticker, period="60d", interval="1d", progress=False)
-        return df if len(df) >= 30 else None
+        df = yf.download(ticker, period="90d", interval="1d", progress=False)
+        return df if len(df) >= 50 else None
     except:
         return None
 
 
-def analyze_biotech(ticker):
-    df = get_data(ticker)
-    if df is None:
-        return None
-    volume = df["Volume"]
-    close = df["Close"]
-    vol_avg = float(volume.rolling(20).mean().iloc[-1])
-    vol_now = float(volume.iloc[-1])
-    price = float(close.iloc[-1])
-    if vol_now > vol_avg * 3:
-        stop = round(price * 0.92, 2)
-        t1 = round(price * 1.15, 2)
-        t2 = round(price * 1.30, 2)
-        rr = round((t1 - price) / (price - stop), 2)
-        if rr >= 1.5:
-            return {
-                "ticker": ticker,
-                "sector": "Biotech 🧬",
-                "direction": "LONG",
-                "price": round(price, 2),
-                "stop": stop,
-                "stop_pct": round((price - stop) / price * 100, 1),
-                "t1": t1,
-                "t1_pct": round((t1 - price) / price * 100, 1),
-                "t2": t2,
-                "t2_pct": round((t2 - price) / price * 100, 1),
-                "rr": rr,
-                "reason": [
-                    f"Volume Spike {int(vol_now/vol_avg*100)}% من المتوسط",
-                    "احتمال خبر FDA قادم"
-                ],
-                "confidence": 70
-            }
-    return None
+# ─────────────────────────────────────────
+# BULLISH PATTERNS
+# ─────────────────────────────────────────
+
+def detect_bullish_candles(df):
+    patterns = []
+    o = df["Open"].values.astype(float)
+    c = df["Close"].values.astype(float)
+    h = df["High"].values.astype(float)
+    l = df["Low"].values.astype(float)
+
+    def body(i): return abs(c[i] - o[i])
+    def full(i): return h[i] - l[i]
+    def upper(i): return h[i] - max(o[i], c[i])
+    def lower(i): return min(o[i], c[i]) - l[i]
+    def is_green(i): return c[i] > o[i]
+    def is_red(i): return c[i] < o[i]
+
+    # 3 White Soldiers
+    if (is_green(-3) and is_green(-2) and is_green(-1) and
+        c[-2] > c[-3] and c[-1] > c[-2] and
+        o[-2] > o[-3] and o[-2] < c[-3] and
+        o[-1] > o[-2] and o[-1] < c[-2] and
+        full(-1) > 0 and body(-1)/full(-1) > 0.6 and
+        full(-2) > 0 and body(-2)/full(-2) > 0.6):
+        patterns.append(("3 White Soldiers", 90))
+
+    # Marubozu
+    if (is_green(-1) and full(-1) > 0 and
+        body(-1)/full(-1) > 0.9 and
+        upper(-1) < body(-1)*0.05 and
+        lower(-1) < body(-1)*0.05):
+        patterns.append(("Marubozu", 75))
+
+    # Bullish Engulfing
+    if (is_red(-2) and is_green(-1) and
+        o[-1] < c[-2] and c[-1] > o[-2]):
+        patterns.append(("Bullish Engulfing", 70))
+
+    # Morning Star
+    if (is_red(-3) and body(-2) < body(-3)*0.3 and
+        is_green(-1) and c[-1] > (o[-3] + c[-3])/2):
+        patterns.append(("Morning Star", 72))
+
+    # Hammer
+    if (full(-1) > 0 and body(-1)/full(-1) < 0.35 and
+        lower(-1) > body(-1)*2 and upper(-1) < body(-1)*0.5 and
+        c[-4] > c[-1]):
+        patterns.append(("Hammer", 65))
+
+    # Inverted Hammer
+    if (full(-1) > 0 and body(-1) > 0 and
+        upper(-1) >= body(-1)*2 and lower(-1) < body(-1)*0.3 and
+        c[-4] > c[-1]):
+        patterns.append(("Inverted Hammer", 62))
+
+    # Piercing Line
+    if (is_red(-2) and is_green(-1) and
+        o[-1] < l[-2] and c[-1] > (o[-2] + c[-2])/2):
+        patterns.append(("Piercing Line", 68))
+
+    # Bullish Harami
+    if (is_red(-2) and is_green(-1) and
+        o[-1] > c[-2] and c[-1] < o[-2]):
+        patterns.append(("Bullish Harami", 60))
+
+    return patterns
 
 
-def analyze(ticker, sector, regime):
+def detect_bullish_chart(df):
+    patterns = []
+    close = df["Close"].values.astype(float)
+    high = df["High"].values.astype(float)
+    low = df["Low"].values.astype(float)
+    n = len(close)
+
+    # Ascending Triangle
+    try:
+        highs_20 = high[-20:]
+        lows_20 = low[-20:]
+        resistance = np.max(highs_20)
+        resistance_touches = np.sum(highs_20 > resistance * 0.995)
+        lows_trend = np.polyfit(range(20), lows_20, 1)[0]
+        if resistance_touches >= 2 and lows_trend > 0 and close[-1] > resistance * 0.998:
+            patterns.append(("Ascending Triangle", 78))
+    except:
+        pass
+
+    # Falling Wedge
+    try:
+        highs_25 = high[-25:]
+        lows_25 = low[-25:]
+        h_slope = np.polyfit(range(25), highs_25, 1)[0]
+        l_slope = np.polyfit(range(25), lows_25, 1)[0]
+        if h_slope < 0 and l_slope < 0 and l_slope < h_slope and close[-1] > close[-3]:
+            patterns.append(("Falling Wedge", 75))
+    except:
+        pass
+
+    # Double Bottom
+    try:
+        lows_40 = low[-40:]
+        min1_idx = np.argmin(lows_40[:20])
+        min2_idx = np.argmin(lows_40[20:]) + 20
+        min1 = lows_40[min1_idx]
+        min2 = lows_40[min2_idx]
+        if abs(min1 - min2)/min1 < 0.03 and close[-1] > np.max(lows_40[min1_idx:min2_idx]):
+            patterns.append(("Double Bottom", 80))
+    except:
+        pass
+
+    # Inverse H&S
+    try:
+        lows_50 = low[-50:]
+        left = np.min(lows_50[:15])
+        head = np.min(lows_50[15:35])
+        right = np.min(lows_50[35:])
+        if head < left and head < right and abs(left-right)/left < 0.05:
+            neckline = np.max(high[-50:][15:35])
+            if close[-1] > neckline * 0.998:
+                patterns.append(("Inverse H&S", 85))
+    except:
+        pass
+
+    # Cup & Handle
+    try:
+        if n >= 50:
+            cup_low = np.min(close[-50:-10])
+            cup_start = close[-50]
+            cup_end = close[-10]
+            if (abs(cup_start - cup_end)/cup_start < 0.05 and
+                cup_low < cup_start * 0.9 and
+                np.min(close[-10:]) > cup_low and
+                close[-1] > cup_end * 0.995):
+                patterns.append(("Cup & Handle", 82))
+    except:
+        pass
+
+    # Bull Flag
+    try:
+        pole_gain = (close[-15] - close[-25]) / close[-25]
+        flag_slope = np.polyfit(range(10), close[-10:], 1)[0]
+        if pole_gain > 0.05 and -0.002 < flag_slope < 0.001 and close[-1] > close[-2]:
+            patterns.append(("Bull Flag", 76))
+    except:
+        pass
+
+    # Symmetrical Triangle Breakout Up
+    try:
+        highs_30 = high[-30:]
+        lows_30 = low[-30:]
+        h_slope = np.polyfit(range(30), highs_30, 1)[0]
+        l_slope = np.polyfit(range(30), lows_30, 1)[0]
+        if h_slope < -0.01 and l_slope > 0.01 and close[-1] > close[-2] and close[-1] > np.mean(highs_30[-5:]):
+            patterns.append(("Symmetrical Triangle ↑", 72))
+    except:
+        pass
+
+    return patterns
+
+
+# ─────────────────────────────────────────
+# BEARISH PATTERNS
+# ─────────────────────────────────────────
+
+def detect_bearish_candles(df):
+    patterns = []
+    o = df["Open"].values.astype(float)
+    c = df["Close"].values.astype(float)
+    h = df["High"].values.astype(float)
+    l = df["Low"].values.astype(float)
+
+    def body(i): return abs(c[i] - o[i])
+    def full(i): return h[i] - l[i]
+    def upper(i): return h[i] - max(o[i], c[i])
+    def lower(i): return min(o[i], c[i]) - l[i]
+    def is_green(i): return c[i] > o[i]
+    def is_red(i): return c[i] < o[i]
+
+    # 3 Black Crows
+    if (is_red(-3) and is_red(-2) and is_red(-1) and
+        c[-2] < c[-3] and c[-1] < c[-2] and
+        o[-2] < o[-3] and o[-2] > c[-3] and
+        o[-1] < o[-2] and o[-1] > c[-2] and
+        full(-1) > 0 and body(-1)/full(-1) > 0.6 and
+        full(-2) > 0 and body(-2)/full(-2) > 0.6):
+        patterns.append(("3 Black Crows", 90))
+
+    # Bearish Marubozu
+    if (is_red(-1) and full(-1) > 0 and
+        body(-1)/full(-1) > 0.9 and
+        upper(-1) < body(-1)*0.05 and
+        lower(-1) < body(-1)*0.05):
+        patterns.append(("Bearish Marubozu", 75))
+
+    # Bearish Engulfing
+    if (is_green(-2) and is_red(-1) and
+        o[-1] > c[-2] and c[-1] < o[-2]):
+        patterns.append(("Bearish Engulfing", 70))
+
+    # Evening Star
+    if (is_green(-3) and body(-2) < body(-3)*0.3 and
+        is_red(-1) and c[-1] < (o[-3] + c[-3])/2):
+        patterns.append(("Evening Star", 72))
+
+    # Shooting Star
+    if (full(-1) > 0 and body(-1) > 0 and
+        upper(-1) >= body(-1)*2 and lower(-1) < body(-1)*0.3 and
+        c[-4] < c[-1]):
+        patterns.append(("Shooting Star", 68))
+
+    # Hanging Man
+    if (full(-1) > 0 and body(-1)/full(-1) < 0.35 and
+        lower(-1) > body(-1)*2 and upper(-1) < body(-1)*0.5 and
+        c[-4] < c[-1]):
+        patterns.append(("Hanging Man", 65))
+
+    # Bearish Harami
+    if (is_green(-2) and is_red(-1) and
+        o[-1] < c[-2] and c[-1] > o[-2]):
+        patterns.append(("Bearish Harami", 60))
+
+    # Dark Cloud Cover
+    if (is_green(-2) and is_red(-1) and
+        o[-1] > h[-2] and c[-1] < (o[-2] + c[-2])/2):
+        patterns.append(("Dark Cloud Cover", 68))
+
+    return patterns
+
+
+def detect_bearish_chart(df):
+    patterns = []
+    close = df["Close"].values.astype(float)
+    high = df["High"].values.astype(float)
+    low = df["Low"].values.astype(float)
+
+    # Head & Shoulders
+    try:
+        highs_50 = high[-50:]
+        left = np.max(highs_50[:15])
+        head = np.max(highs_50[15:35])
+        right = np.max(highs_50[35:])
+        if head > left and head > right and abs(left-right)/left < 0.05:
+            neckline = np.min(low[-50:][15:35])
+            if close[-1] < neckline * 1.002:
+                patterns.append(("Head & Shoulders", 85))
+    except:
+        pass
+
+    # Double Top
+    try:
+        highs_40 = high[-40:]
+        max1_idx = np.argmax(highs_40[:20])
+        max2_idx = np.argmax(highs_40[20:]) + 20
+        max1 = highs_40[max1_idx]
+        max2 = highs_40[max2_idx]
+        if abs(max1 - max2)/max1 < 0.03 and close[-1] < np.min(highs_40[max1_idx:max2_idx]):
+            patterns.append(("Double Top", 80))
+    except:
+        pass
+
+    # Rising Wedge
+    try:
+        highs_25 = high[-25:]
+        lows_25 = low[-25:]
+        h_slope = np.polyfit(range(25), highs_25, 1)[0]
+        l_slope = np.polyfit(range(25), lows_25, 1)[0]
+        if h_slope > 0 and l_slope > 0 and l_slope > h_slope and close[-1] < close[-3]:
+            patterns.append(("Rising Wedge", 75))
+    except:
+        pass
+
+    # Descending Triangle
+    try:
+        highs_20 = high[-20:]
+        lows_20 = low[-20:]
+        support = np.min(lows_20)
+        support_touches = np.sum(lows_20 < support * 1.005)
+        highs_trend = np.polyfit(range(20), highs_20, 1)[0]
+        if support_touches >= 2 and highs_trend < 0 and close[-1] < support * 1.002:
+            patterns.append(("Descending Triangle", 78))
+    except:
+        pass
+
+    # Bear Flag
+    try:
+        pole_drop = (close[-25] - close[-15]) / close[-25]
+        flag_slope = np.polyfit(range(10), close[-10:], 1)[0]
+        if pole_drop > 0.05 and 0.001 > flag_slope > -0.001 and close[-1] < close[-2]:
+            patterns.append(("Bear Flag", 76))
+    except:
+        pass
+
+    # Symmetrical Triangle Breakout Down
+    try:
+        highs_30 = high[-30:]
+        lows_30 = low[-30:]
+        h_slope = np.polyfit(range(30), highs_30, 1)[0]
+        l_slope = np.polyfit(range(30), lows_30, 1)[0]
+        if h_slope < -0.01 and l_slope > 0.01 and close[-1] < close[-2] and close[-1] < np.mean(lows_30[-5:]):
+            patterns.append(("Symmetrical Triangle ↓", 72))
+    except:
+        pass
+
+    return patterns
+
+
+# ─────────────────────────────────────────
+# ANALYSIS — 3 TRACKS — LONG & SHORT
+# ─────────────────────────────────────────
+
+def analyze(ticker, sector, market_state, regime):
     df = get_data(ticker)
     if df is None:
         return None
@@ -326,121 +546,217 @@ def analyze(ticker, sector, regime):
     low = df["Low"]
     volume = df["Volume"]
 
-    ma20 = close.rolling(20).mean()
-    ma50 = close.rolling(50).mean()
-
-    delta = close.diff()
-    gain = delta.where(delta > 0, 0).rolling(14).mean()
-    loss = -delta.where(delta < 0, 0).rolling(14).mean()
-    rsi = 100 - (100 / (1 + gain / loss))
-
     price = float(close.iloc[-1])
-    rsi_val = float(rsi.iloc[-1])
-    ma20_val = float(ma20.iloc[-1])
-    ma50_val = float(ma50.iloc[-1])
     vol_avg = float(volume.rolling(20).mean().iloc[-1])
     vol_now = float(volume.iloc[-1])
-    resistance = float(high.rolling(20).max().iloc[-2])
+
+    tr = np.maximum(high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1))))
+    atr = float(tr.rolling(14).mean().iloc[-1])
+    atr_pct = atr / price
+
+    ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
+
+    delta_s = close.diff()
+    gain = delta_s.where(delta_s > 0, 0).rolling(14).mean()
+    loss = -delta_s.where(delta_s < 0, 0).rolling(14).mean()
+    rsi = float((100 - (100 / (1 + gain / loss))).iloc[-1])
+
     support = float(low.rolling(20).min().iloc[-2])
+    resistance = float(high.rolling(20).max().iloc[-2])
 
-    direction = None
-    reason = []
-    confidence = 50
+    # Patterns
+    bull_candles = detect_bullish_candles(df)
+    bull_charts = detect_bullish_chart(df)
+    bear_candles = detect_bearish_candles(df)
+    bear_charts = detect_bearish_chart(df)
 
-    if sector == "Technology" and regime == "BEAR":
-        return None
+    all_bull = bull_candles + bull_charts
+    all_bear = bear_candles + bear_charts
 
-    if sector == "Staples" and regime == "BULL":
-        if price < support * 0.998 and vol_now > vol_avg * 1.3:
-            direction = "SHORT"
-            reason.append(f"Breakdown في Staples — سوق صاعد")
-            reason.append(f"Volume مرتفع {int(vol_now/vol_avg*100)}%")
-            confidence += 15
+    results = []
 
-    if direction is None:
-        if price > resistance * 1.002 and vol_now > vol_avg * 1.3 and rsi_val > 50:
-            direction = "LONG"
-            reason.append(f"Breakout فوق ${resistance:.2f}")
-            reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
-            confidence += 20
-        elif price > ma50_val and abs(price - ma20_val) / price < 0.01 and rsi_val < 45:
-            direction = "LONG"
-            reason.append("Pullback على MA20")
-            reason.append(f"RSI {rsi_val:.0f} منطقة شراء")
-            confidence += 15
-        elif price < support * 0.998 and vol_now > vol_avg * 1.3 and rsi_val < 50:
-            direction = "SHORT"
-            reason.append(f"Breakdown تحت ${support:.2f}")
-            reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
-            confidence += 20
+    def make_signal(track, label, direction, pattern, conf, reason):
+        if direction == "LONG":
+            stop = round(price - atr * 1.5, 2)
+            t1 = round(price + atr * 2, 2)
+            t2 = round(price + atr * 3.5, 2)
+        else:
+            stop = round(price + atr * 1.5, 2)
+            t1 = round(price - atr * 2, 2)
+            t2 = round(price - atr * 3.5, 2)
 
-    if direction is None:
-        return None
+        rr = round(abs(t1-price)/abs(price-stop), 2) if price != stop else 0
+        if rr < 1.5:
+            return None
 
-    if direction == "LONG":
-        stop = round(price * 0.985, 2)
-        t1 = round(price * 1.02, 2)
-        t2 = round(price * 1.035, 2)
+        return {
+            "track": track,
+            "track_label": label,
+            "ticker": ticker,
+            "sector": sector,
+            "pattern": pattern,
+            "direction": direction,
+            "price": round(price, 2),
+            "stop": stop,
+            "stop_pct": round(abs(price-stop)/price*100, 1),
+            "t1": t1,
+            "t1_pct": round(abs(t1-price)/price*100, 1),
+            "t2": t2,
+            "t2_pct": round(abs(t2-price)/price*100, 1),
+            "rr": rr,
+            "reason": reason,
+            "confidence": min(conf, 95),
+            "market_state": market_state
+        }
+
+    # ══════════════════════════════
+    # 🔵 TRACK A — فكرة Muhannad
+    # ══════════════════════════════
+    # LONG
+    if all_bull and vol_now > vol_avg * 1.1:
+        top = max(all_bull, key=lambda x: x[1])
+        conf = 50 + int(top[1] * 0.3)
+        if regime == "BULL": conf += 5
+        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 60:
+            s = make_signal("A", "🔵 Signal A — Price Action", "LONG", top[0], conf, reason)
+            if s: results.append(s)
+
+    # SHORT
+    if all_bear and vol_now > vol_avg * 1.1:
+        top = max(all_bear, key=lambda x: x[1])
+        conf = 50 + int(top[1] * 0.3)
+        if regime == "BEAR": conf += 5
+        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 60:
+            s = make_signal("A", "🔵 Signal A — Price Action", "SHORT", top[0], conf, reason)
+            if s: results.append(s)
+
+    # ══════════════════════════════
+    # 🟠 TRACK B — فكرة HAKEM
+    # ══════════════════════════════
+    # LONG
+    b_long = None
+    for p in bull_candles:
+        if p[0] == "3 White Soldiers":
+            b_long = p
+            break
+        if p[0] == "Inverted Hammer" and market_state == "CALM":
+            b_long = p
+            break
+    for p in bull_charts:
+        if p[0] in ["Inverse H&S", "Double Bottom", "Cup & Handle"]:
+            b_long = p
+            break
+
+    if b_long and price > ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
+        conf = 55 + int(b_long[1] * 0.35)
+        if regime == "BULL": conf += 10
+        if market_state == "CALM": conf += 5
+        reason = [f"Pattern: {b_long[0]}", f"Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 65:
+            s = make_signal("B", "🟠 Signal B — HAKEM Method", "LONG", b_long[0], conf, reason)
+            if s: results.append(s)
+
+    # SHORT
+    b_short = None
+    for p in bear_candles:
+        if p[0] == "3 Black Crows":
+            b_short = p
+            break
+        if p[0] == "Shooting Star" and market_state == "CALM":
+            b_short = p
+            break
+    for p in bear_charts:
+        if p[0] in ["Head & Shoulders", "Double Top", "Rising Wedge"]:
+            b_short = p
+            break
+
+    if b_short and price < ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
+        conf = 55 + int(b_short[1] * 0.35)
+        if regime == "BEAR": conf += 10
+        if market_state == "CALM": conf += 5
+        reason = [f"Pattern: {b_short[0]}", f"Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 65:
+            s = make_signal("B", "🟠 Signal B — HAKEM Method", "SHORT", b_short[0], conf, reason)
+            if s: results.append(s)
+
+    # ══════════════════════════════
+    # 🟣 TRACK C — المشترك
+    # ══════════════════════════════
+    # LONG
+    if all_bull and price > ema20 and vol_now > vol_avg * 1.2:
+        top = max(all_bull, key=lambda x: x[1])
+        conf = 55 + int(top[1] * 0.35)
+        if regime == "BULL": conf += 8
+        if market_state == "CALM": conf += 5
+        if rsi < 60: conf += 5
+        if price > support * 1.005: conf += 5
+        reason = [f"Pattern: {top[0]}", f"Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 65:
+            s = make_signal("C", "🟣 Signal C — Combined", "LONG", top[0], conf, reason)
+            if s: results.append(s)
+
+    # SHORT
+    if all_bear and price < ema20 and vol_now > vol_avg * 1.2:
+        top = max(all_bear, key=lambda x: x[1])
+        conf = 55 + int(top[1] * 0.35)
+        if regime == "BEAR": conf += 8
+        if market_state == "CALM": conf += 5
+        if rsi > 40: conf += 5
+        if price < resistance * 0.995: conf += 5
+        reason = [f"Pattern: {top[0]}", f"Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if conf >= 65:
+            s = make_signal("C", "🟣 Signal C — Combined", "SHORT", top[0], conf, reason)
+            if s: results.append(s)
+
+    return results if results else None
+
+
+# ─────────────────────────────────────────
+# ACTION DECISION
+# ─────────────────────────────────────────
+
+def get_action(signal):
+    score = 0
+    reasons = []
+    if signal["confidence"] >= 80:
+        score += 1
     else:
-        stop = round(price * 1.015, 2)
-        t1 = round(price * 0.98, 2)
-        t2 = round(price * 0.965, 2)
-
-    risk = abs(price - stop)
-    reward = abs(t1 - price)
-    rr = round(reward / risk, 2) if risk > 0 else 0
-
-    if rr < 1.5:
-        return None
-
-    if ma20_val > ma50_val:
-        confidence += 10
-    if rsi_val > 55 and direction == "LONG":
-        confidence += 5
-    if rsi_val < 45 and direction == "SHORT":
-        confidence += 5
-
-    confidence = min(confidence, 95)
-
-    if confidence < 65:
-        return None
-
-    return {
-        "ticker": ticker,
-        "sector": sector,
-        "direction": direction,
-        "price": round(price, 2),
-        "stop": stop,
-        "stop_pct": round(abs(price - stop) / price * 100, 1),
-        "t1": t1,
-        "t1_pct": round(abs(t1 - price) / price * 100, 1),
-        "t2": t2,
-        "t2_pct": round(abs(t2 - price) / price * 100, 1),
-        "rr": rr,
-        "reason": reason,
-        "confidence": confidence
-    }
+        reasons.append("Confidence below 80")
+    if signal["rr"] >= 2.0:
+        score += 1
+    else:
+        reasons.append("R/R below 1:2")
+    if signal["track"] in ["B", "C"]:
+        score += 1
+    if score == 3:
+        return "🚀 ACTION: ENTER NOW", None
+    elif score == 2:
+        return "⚡ ACTION: CONSIDER", reasons
+    else:
+        return "⚠️ ACTION: WAIT", reasons
 
 
 # ─────────────────────────────────────────
 # TELEGRAM MESSAGE
 # ─────────────────────────────────────────
 
-def send_signal(s, regime, rank):
+def send_signal(s, regime):
     opt = get_options_data(s["ticker"], s["direction"])
-    action, action_reasons = get_action(s, opt)
-
-    medal = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
+    action, action_reasons = get_action(s)
+    regime_icon = "🟢 Bull" if regime == "BULL" else "🔴 Bear"
+    state_icon = "😌 Calm" if s["market_state"] == "CALM" else "⚡ Volatile"
     direction_icon = "📈 LONG" if s["direction"] == "LONG" else "📉 SHORT"
-    regime_icon = "🟢 Bull Market" if regime == "BULL" else "🔴 Bear Market"
 
     msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
-{medal[rank]} HAKEM SIGNAL #{rank}
+{s['track_label']}
 ━━━━━━━━━━━━━━━━━━━━━━━
 📌 {s['ticker']} — {s['sector']}
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-{direction_icon}  |  {regime_icon}
+{direction_icon}  |  {regime_icon}  |  {state_icon}
+🕯️ Pattern: {s['pattern']}
 
 """
     for r in s["reason"]:
@@ -451,9 +767,9 @@ def send_signal(s, regime, rank):
 💰 TRADE SETUP
 ━━━━━━━━━━━━━━━━━━━━━━━
 Entry  ▸  ${s['price']}
-Stop   ▸  ${s['stop']}  (-{s['stop_pct']}%)
-T1     ▸  ${s['t1']}  (+{s['t1_pct']}%)
-T2     ▸  ${s['t2']}  (+{s['t2_pct']}%)
+Stop   ▸  ${s['stop']}  ({'-' if s['direction']=='LONG' else '+'}{s['stop_pct']}%)
+T1     ▸  ${s['t1']}  ({'+' if s['direction']=='LONG' else '-'}{s['t1_pct']}%)
+T2     ▸  ${s['t2']}  ({'+' if s['direction']=='LONG' else '-'}{s['t2_pct']}%)
 R/R    ▸  1 : {s['rr']}
 """
 
@@ -468,7 +784,7 @@ R/R    ▸  1 : {s['rr']}
 ━━━━━━━━━━━━━━━━━━━━━━━
 🎯 OPTIONS PLAY
 ━━━━━━━━━━━━━━━━━━━━━━━
-{opt['type']}  ${opt['strike']}  |  {opt['dte']} DTE
+{'CALL' if s['direction']=='LONG' else 'PUT'}  ${opt['strike']}  |  {opt['dte']} DTE
 ─────────────────────────
 Premium  ▸  ${opt['premium']}
 Delta    ▸  {delta_val}  {delta_icon}
@@ -482,7 +798,7 @@ OI       ▸  {opt['oi']:,}
         msg += """
 ━━━━━━━━━━━━━━━━━━━━━━━
 🎯 OPTIONS
-⚠️ لا يوجد عقد يطابق معايير HAKEM
+⚠️ No contract matches HAKEM criteria
 """
 
     msg += f"""
@@ -495,14 +811,14 @@ OI       ▸  {opt['oi']:,}
         for r in action_reasons:
             msg += f"\n  · {r}"
 
-    msg += f"""
+    msg += """
 ━━━━━━━━━━━━━━━━━━━━━━━
         📡 HAKEM CONSULTING
 ━━━━━━━━━━━━━━━━━━━━━━━"""
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
-    print(f"Sent: {s['ticker']} #{rank} — {action}")
+    print(f"Sent: {s['ticker']} {s['direction']} Track {s['track']} — {action}")
 
 
 # ─────────────────────────────────────────
@@ -514,29 +830,53 @@ def run():
         print("السوق مغلق")
         return
 
-    regime = get_spy_regime()
-    print(f"Market Regime: {regime}")
+    market_state, regime = get_market_state()
+    print(f"Market: {market_state} | Regime: {regime}")
 
-    signals = []
+    best_a_long = None
+    best_a_short = None
+    best_b_long = None
+    best_b_short = None
+    best_c_long = None
+    best_c_short = None
 
     for sector, tickers in WATCHLIST.items():
         for ticker in tickers:
             try:
-                if sector == "Biotech":
-                    signal = analyze_biotech(ticker)
-                else:
-                    signal = analyze(ticker, sector, regime)
-                if signal:
-                    signals.append(signal)
+                results = analyze(ticker, sector, market_state, regime)
+                if not results:
+                    continue
+                for signal in results:
+                    t = signal["track"]
+                    d = signal["direction"]
+                    if t == "A" and d == "LONG":
+                        if best_a_long is None or signal["confidence"] > best_a_long["confidence"]:
+                            best_a_long = signal
+                    elif t == "A" and d == "SHORT":
+                        if best_a_short is None or signal["confidence"] > best_a_short["confidence"]:
+                            best_a_short = signal
+                    elif t == "B" and d == "LONG":
+                        if best_b_long is None or signal["confidence"] > best_b_long["confidence"]:
+                            best_b_long = signal
+                    elif t == "B" and d == "SHORT":
+                        if best_b_short is None or signal["confidence"] > best_b_short["confidence"]:
+                            best_b_short = signal
+                    elif t == "C" and d == "LONG":
+                        if best_c_long is None or signal["confidence"] > best_c_long["confidence"]:
+                            best_c_long = signal
+                    elif t == "C" and d == "SHORT":
+                        if best_c_short is None or signal["confidence"] > best_c_short["confidence"]:
+                            best_c_short = signal
             except Exception as e:
                 print(f"Error {ticker}: {e}")
 
-    signals = sorted(signals, key=lambda x: x["confidence"], reverse=True)[:5]
+    sent = False
+    for signal in [best_a_long, best_a_short, best_b_long, best_b_short, best_c_long, best_c_short]:
+        if signal:
+            send_signal(signal, regime)
+            sent = True
 
-    if signals:
-        for i, signal in enumerate(signals, 1):
-            send_signal(signal, regime, i)
-    else:
+    if not sent:
         print("No signals found")
 
 
