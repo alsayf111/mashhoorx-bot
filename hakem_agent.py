@@ -12,7 +12,9 @@ def send_message(text):
         "parse_mode": "HTML"
     }
     response = requests.post(url, json=payload)
-    return response.json()
+    result = response.json()
+    print(result)
+    return result
 
 def run_agent(signal: dict):
     symbol = signal.get("symbol", "Unknown")
