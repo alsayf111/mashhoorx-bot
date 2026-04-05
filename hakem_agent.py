@@ -4,6 +4,7 @@ import yfinance as yf
 import numpy as np
 from datetime import datetime, timedelta
 import pytz
+from hakem_logger import log_us_signal
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
@@ -243,7 +244,6 @@ def detect_bullish_candles(df):
     def is_green(i): return c[i] > o[i]
     def is_red(i): return c[i] < o[i]
 
-    # 3 White Soldiers
     if (is_green(-3) and is_green(-2) and is_green(-1) and
         c[-2] > c[-3] and c[-1] > c[-2] and
         o[-2] > o[-3] and o[-2] < c[-3] and
@@ -252,41 +252,34 @@ def detect_bullish_candles(df):
         full(-2) > 0 and body(-2)/full(-2) > 0.6):
         patterns.append(("3 White Soldiers", 90))
 
-    # Marubozu
     if (is_green(-1) and full(-1) > 0 and
         body(-1)/full(-1) > 0.9 and
         upper(-1) < body(-1)*0.05 and
         lower(-1) < body(-1)*0.05):
         patterns.append(("Marubozu", 75))
 
-    # Bullish Engulfing
     if (is_red(-2) and is_green(-1) and
         o[-1] < c[-2] and c[-1] > o[-2]):
         patterns.append(("Bullish Engulfing", 70))
 
-    # Morning Star
     if (is_red(-3) and body(-2) < body(-3)*0.3 and
         is_green(-1) and c[-1] > (o[-3] + c[-3])/2):
         patterns.append(("Morning Star", 72))
 
-    # Hammer
     if (full(-1) > 0 and body(-1)/full(-1) < 0.35 and
         lower(-1) > body(-1)*2 and upper(-1) < body(-1)*0.5 and
         c[-4] > c[-1]):
         patterns.append(("Hammer", 65))
 
-    # Inverted Hammer
     if (full(-1) > 0 and body(-1) > 0 and
         upper(-1) >= body(-1)*2 and lower(-1) < body(-1)*0.3 and
         c[-4] > c[-1]):
         patterns.append(("Inverted Hammer", 62))
 
-    # Piercing Line
     if (is_red(-2) and is_green(-1) and
         o[-1] < l[-2] and c[-1] > (o[-2] + c[-2])/2):
         patterns.append(("Piercing Line", 68))
 
-    # Bullish Harami
     if (is_red(-2) and is_green(-1) and
         o[-1] > c[-2] and c[-1] < o[-2]):
         patterns.append(("Bullish Harami", 60))
@@ -301,7 +294,6 @@ def detect_bullish_chart(df):
     low = df["Low"].values.astype(float)
     n = len(close)
 
-    # Ascending Triangle
     try:
         highs_20 = high[-20:]
         lows_20 = low[-20:]
@@ -310,10 +302,8 @@ def detect_bullish_chart(df):
         lows_trend = np.polyfit(range(20), lows_20, 1)[0]
         if resistance_touches >= 2 and lows_trend > 0 and close[-1] > resistance * 0.998:
             patterns.append(("Ascending Triangle", 78))
-    except:
-        pass
+    except: pass
 
-    # Falling Wedge
     try:
         highs_25 = high[-25:]
         lows_25 = low[-25:]
@@ -321,10 +311,8 @@ def detect_bullish_chart(df):
         l_slope = np.polyfit(range(25), lows_25, 1)[0]
         if h_slope < 0 and l_slope < 0 and l_slope < h_slope and close[-1] > close[-3]:
             patterns.append(("Falling Wedge", 75))
-    except:
-        pass
+    except: pass
 
-    # Double Bottom
     try:
         lows_40 = low[-40:]
         min1_idx = np.argmin(lows_40[:20])
@@ -333,10 +321,8 @@ def detect_bullish_chart(df):
         min2 = lows_40[min2_idx]
         if abs(min1 - min2)/min1 < 0.03 and close[-1] > np.max(lows_40[min1_idx:min2_idx]):
             patterns.append(("Double Bottom", 80))
-    except:
-        pass
+    except: pass
 
-    # Inverse H&S
     try:
         lows_50 = low[-50:]
         left = np.min(lows_50[:15])
@@ -346,10 +332,8 @@ def detect_bullish_chart(df):
             neckline = np.max(high[-50:][15:35])
             if close[-1] > neckline * 0.998:
                 patterns.append(("Inverse H&S", 85))
-    except:
-        pass
+    except: pass
 
-    # Cup & Handle
     try:
         if n >= 50:
             cup_low = np.min(close[-50:-10])
@@ -360,28 +344,14 @@ def detect_bullish_chart(df):
                 np.min(close[-10:]) > cup_low and
                 close[-1] > cup_end * 0.995):
                 patterns.append(("Cup & Handle", 82))
-    except:
-        pass
+    except: pass
 
-    # Bull Flag
     try:
         pole_gain = (close[-15] - close[-25]) / close[-25]
         flag_slope = np.polyfit(range(10), close[-10:], 1)[0]
         if pole_gain > 0.05 and -0.002 < flag_slope < 0.001 and close[-1] > close[-2]:
             patterns.append(("Bull Flag", 76))
-    except:
-        pass
-
-    # Symmetrical Triangle Breakout Up
-    try:
-        highs_30 = high[-30:]
-        lows_30 = low[-30:]
-        h_slope = np.polyfit(range(30), highs_30, 1)[0]
-        l_slope = np.polyfit(range(30), lows_30, 1)[0]
-        if h_slope < -0.01 and l_slope > 0.01 and close[-1] > close[-2] and close[-1] > np.mean(highs_30[-5:]):
-            patterns.append(("Symmetrical Triangle ↑", 72))
-    except:
-        pass
+    except: pass
 
     return patterns
 
@@ -404,7 +374,6 @@ def detect_bearish_candles(df):
     def is_green(i): return c[i] > o[i]
     def is_red(i): return c[i] < o[i]
 
-    # 3 Black Crows
     if (is_red(-3) and is_red(-2) and is_red(-1) and
         c[-2] < c[-3] and c[-1] < c[-2] and
         o[-2] < o[-3] and o[-2] > c[-3] and
@@ -413,41 +382,34 @@ def detect_bearish_candles(df):
         full(-2) > 0 and body(-2)/full(-2) > 0.6):
         patterns.append(("3 Black Crows", 90))
 
-    # Bearish Marubozu
     if (is_red(-1) and full(-1) > 0 and
         body(-1)/full(-1) > 0.9 and
         upper(-1) < body(-1)*0.05 and
         lower(-1) < body(-1)*0.05):
         patterns.append(("Bearish Marubozu", 75))
 
-    # Bearish Engulfing
     if (is_green(-2) and is_red(-1) and
         o[-1] > c[-2] and c[-1] < o[-2]):
         patterns.append(("Bearish Engulfing", 70))
 
-    # Evening Star
     if (is_green(-3) and body(-2) < body(-3)*0.3 and
         is_red(-1) and c[-1] < (o[-3] + c[-3])/2):
         patterns.append(("Evening Star", 72))
 
-    # Shooting Star
     if (full(-1) > 0 and body(-1) > 0 and
         upper(-1) >= body(-1)*2 and lower(-1) < body(-1)*0.3 and
         c[-4] < c[-1]):
         patterns.append(("Shooting Star", 68))
 
-    # Hanging Man
     if (full(-1) > 0 and body(-1)/full(-1) < 0.35 and
         lower(-1) > body(-1)*2 and upper(-1) < body(-1)*0.5 and
         c[-4] < c[-1]):
         patterns.append(("Hanging Man", 65))
 
-    # Bearish Harami
     if (is_green(-2) and is_red(-1) and
         o[-1] < c[-2] and c[-1] > o[-2]):
         patterns.append(("Bearish Harami", 60))
 
-    # Dark Cloud Cover
     if (is_green(-2) and is_red(-1) and
         o[-1] > h[-2] and c[-1] < (o[-2] + c[-2])/2):
         patterns.append(("Dark Cloud Cover", 68))
@@ -461,7 +423,6 @@ def detect_bearish_chart(df):
     high = df["High"].values.astype(float)
     low = df["Low"].values.astype(float)
 
-    # Head & Shoulders
     try:
         highs_50 = high[-50:]
         left = np.max(highs_50[:15])
@@ -471,10 +432,8 @@ def detect_bearish_chart(df):
             neckline = np.min(low[-50:][15:35])
             if close[-1] < neckline * 1.002:
                 patterns.append(("Head & Shoulders", 85))
-    except:
-        pass
+    except: pass
 
-    # Double Top
     try:
         highs_40 = high[-40:]
         max1_idx = np.argmax(highs_40[:20])
@@ -483,10 +442,8 @@ def detect_bearish_chart(df):
         max2 = highs_40[max2_idx]
         if abs(max1 - max2)/max1 < 0.03 and close[-1] < np.min(highs_40[max1_idx:max2_idx]):
             patterns.append(("Double Top", 80))
-    except:
-        pass
+    except: pass
 
-    # Rising Wedge
     try:
         highs_25 = high[-25:]
         lows_25 = low[-25:]
@@ -494,10 +451,8 @@ def detect_bearish_chart(df):
         l_slope = np.polyfit(range(25), lows_25, 1)[0]
         if h_slope > 0 and l_slope > 0 and l_slope > h_slope and close[-1] < close[-3]:
             patterns.append(("Rising Wedge", 75))
-    except:
-        pass
+    except: pass
 
-    # Descending Triangle
     try:
         highs_20 = high[-20:]
         lows_20 = low[-20:]
@@ -506,34 +461,20 @@ def detect_bearish_chart(df):
         highs_trend = np.polyfit(range(20), highs_20, 1)[0]
         if support_touches >= 2 and highs_trend < 0 and close[-1] < support * 1.002:
             patterns.append(("Descending Triangle", 78))
-    except:
-        pass
+    except: pass
 
-    # Bear Flag
     try:
         pole_drop = (close[-25] - close[-15]) / close[-25]
         flag_slope = np.polyfit(range(10), close[-10:], 1)[0]
         if pole_drop > 0.05 and 0.001 > flag_slope > -0.001 and close[-1] < close[-2]:
             patterns.append(("Bear Flag", 76))
-    except:
-        pass
-
-    # Symmetrical Triangle Breakout Down
-    try:
-        highs_30 = high[-30:]
-        lows_30 = low[-30:]
-        h_slope = np.polyfit(range(30), highs_30, 1)[0]
-        l_slope = np.polyfit(range(30), lows_30, 1)[0]
-        if h_slope < -0.01 and l_slope > 0.01 and close[-1] < close[-2] and close[-1] < np.mean(lows_30[-5:]):
-            patterns.append(("Symmetrical Triangle ↓", 72))
-    except:
-        pass
+    except: pass
 
     return patterns
 
 
 # ─────────────────────────────────────────
-# ANALYSIS — 3 TRACKS — LONG & SHORT
+# ANALYSIS — 3 TRACKS
 # ─────────────────────────────────────────
 
 def analyze(ticker, sector, market_state, regime):
@@ -564,7 +505,6 @@ def analyze(ticker, sector, market_state, regime):
     support = float(low.rolling(20).min().iloc[-2])
     resistance = float(high.rolling(20).max().iloc[-2])
 
-    # Patterns
     bull_candles = detect_bullish_candles(df)
     bull_charts = detect_bullish_chart(df)
     bear_candles = detect_bearish_candles(df)
@@ -609,10 +549,7 @@ def analyze(ticker, sector, market_state, regime):
             "market_state": market_state
         }
 
-    # ══════════════════════════════
-    # 🔵 TRACK A — فكرة Muhannad
-    # ══════════════════════════════
-    # LONG
+    # TRACK A LONG
     if all_bull and vol_now > vol_avg * 1.1:
         top = max(all_bull, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
@@ -622,7 +559,7 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("A", "🔵 Signal A — Price Action", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    # SHORT
+    # TRACK A SHORT
     if all_bear and vol_now > vol_avg * 1.1:
         top = max(all_bear, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
@@ -632,22 +569,14 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("A", "🔵 Signal A — Price Action", "SHORT", top[0], conf, reason)
             if s: results.append(s)
 
-    # ══════════════════════════════
-    # 🟠 TRACK B — فكرة HAKEM
-    # ══════════════════════════════
-    # LONG
+    # TRACK B LONG
     b_long = None
     for p in bull_candles:
-        if p[0] == "3 White Soldiers":
-            b_long = p
-            break
-        if p[0] == "Inverted Hammer" and market_state == "CALM":
-            b_long = p
-            break
-    for p in bull_charts:
-        if p[0] in ["Inverse H&S", "Double Bottom", "Cup & Handle"]:
-            b_long = p
-            break
+        if p[0] == "3 White Soldiers": b_long = p; break
+        if p[0] == "Inverted Hammer" and market_state == "CALM": b_long = p; break
+    if not b_long:
+        for p in bull_charts:
+            if p[0] in ["Inverse H&S", "Double Bottom", "Cup & Handle"]: b_long = p; break
 
     if b_long and price > ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
         conf = 55 + int(b_long[1] * 0.35)
@@ -658,19 +587,14 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "LONG", b_long[0], conf, reason)
             if s: results.append(s)
 
-    # SHORT
+    # TRACK B SHORT
     b_short = None
     for p in bear_candles:
-        if p[0] == "3 Black Crows":
-            b_short = p
-            break
-        if p[0] == "Shooting Star" and market_state == "CALM":
-            b_short = p
-            break
-    for p in bear_charts:
-        if p[0] in ["Head & Shoulders", "Double Top", "Rising Wedge"]:
-            b_short = p
-            break
+        if p[0] == "3 Black Crows": b_short = p; break
+        if p[0] == "Shooting Star" and market_state == "CALM": b_short = p; break
+    if not b_short:
+        for p in bear_charts:
+            if p[0] in ["Head & Shoulders", "Double Top", "Rising Wedge"]: b_short = p; break
 
     if b_short and price < ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
         conf = 55 + int(b_short[1] * 0.35)
@@ -681,10 +605,7 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "SHORT", b_short[0], conf, reason)
             if s: results.append(s)
 
-    # ══════════════════════════════
-    # 🟣 TRACK C — المشترك
-    # ══════════════════════════════
-    # LONG
+    # TRACK C LONG
     if all_bull and price > ema20 and vol_now > vol_avg * 1.2:
         top = max(all_bull, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
@@ -697,7 +618,7 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("C", "🟣 Signal C — Combined", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    # SHORT
+    # TRACK C SHORT
     if all_bear and price < ema20 and vol_now > vol_avg * 1.2:
         top = max(all_bear, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
@@ -818,6 +739,7 @@ OI       ▸  {opt['oi']:,}
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+    log_us_signal(s, regime, s["market_state"], action)
     print(f"Sent: {s['ticker']} {s['direction']} Track {s['track']} — {action}")
 
 
