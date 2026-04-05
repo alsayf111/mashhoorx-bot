@@ -14,19 +14,138 @@ WATCHLIST = {
     "Communication": ["NFLX", "META", "GOOGL"],
     "Staples": ["PEP", "KO", "WMT", "COST"],
     "Technology": ["NVDA", "AAPL", "MSFT", "AMD"],
-    "Biotech": ["MRNA", "NVAX", "SAVA", "ACAD", "IONS", "BEAM", "RXRX", "NTLA", "CRSP", "EDIT"]
+    "Biotech": ["MRNA", "NVAX", "SAVA", "ACAD", "IONS", "BEAM", "RXRX", "NTLA", "CRSP", "EDIT"],
+    "Financials": ["JPM", "GS", "BAC", "MS"],
+    "Healthcare": ["JNJ", "UNH", "ABT", "PFE"],
+    "ETFs": ["SPY", "QQQ", "IWM", "XLE"],
+    "Consumer Discretionary": ["F", "GM", "TSLA", "AMZN", "HD", "MCD"],
+    "Industrials": ["BA", "GE", "RTX", "UPS", "FDX"],
+    "Utilities": ["NEE", "DUK", "SO", "AEP"],
+    "Real Estate": ["AMT", "PLD", "SPG", "EQIX"]
 }
 
 # ─────────────────────────────────────────
-# OPTIONS DATA — Massive (Polygon) API
+# ACTION DECISION
 # ─────────────────────────────────────────
+
+def get_action(signal, opt):
+    score = 0
+    reasons = []
+
+    # 1) Confidence
+    if signal["confidence"] >= 85:
+        score += 1
+    else:
+        reasons.append("Confidence دون 85")
+
+    # 2) R/R
+    if signal["rr"] >= 2.0:
+        score += 1
+    else:
+        reasons.append("R/R دون 1:2")
+
+    # 3) Options
+    if opt and opt.get("premium", 0) > 0:
+        delta = abs(opt.get("delta", 0))
+        iv = opt.get("iv", 0)
+        oi = opt.get("oi", 0)
+        spread = opt.get("ask", 0) - opt.get("bid", 0)
+        premium = opt.get("premium", 0)
+
+        opt_ok = (
+            0.40 <= delta <= 0.55
+            and iv < 0.60
+            and oi >= 500
+            and spread <= premium * 0.10
+        )
+        if opt_ok:
+            score += 1
+        else:
+            reasons.append("Options لا تطابق المعايير المثالية")
+    else:
+        reasons.append("لا توجد بيانات Options")
+
+    if score == 3:
+        return "🚀 ACTION: ENTER NOW", None
+    elif score == 2:
+        return "⚡ ACTION: CONSIDER", reasons
+    else:
+        return "⚠️ ACTION: WAIT", reasons
+
+
+# ─────────────────────────────────────────
+# OPTIONS SELECTION — HAKEM Rules
+# ─────────────────────────────────────────
+
+def score_contract(contract, snapshot, current_price, direction):
+    delta = snapshot.get("delta", 0)
+    premium = snapshot.get("premium", 0)
+    volume = snapshot.get("volume", 0)
+    oi = snapshot.get("oi", 0)
+    bid = snapshot.get("bid", 0)
+    ask = snapshot.get("ask", 0)
+    iv = snapshot.get("iv", 0)
+    strike = contract.get("strike_price", 0)
+    expiry_str = contract.get("expiration_date", "")
+
+    try:
+        expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d")
+        dte = (expiry_date - datetime.now()).days
+    except:
+        return None
+
+    if direction == "LONG":
+        if not (0.35 <= delta <= 0.60):
+            return None
+    else:
+        if not (-0.60 <= delta <= -0.35):
+            return None
+
+    if not (15 <= dte <= 35):
+        return None
+
+    if current_price > 0:
+        strike_diff = abs(strike - current_price) / current_price
+        if strike_diff > 0.05:
+            return None
+    else:
+        strike_diff = 0
+
+    if oi < 100:
+        return None
+    if volume < 10:
+        return None
+
+    if bid > 0 and ask > 0:
+        spread_pct = (ask - bid) / ask
+        if spread_pct > 0.15:
+            return None
+    else:
+        spread_pct = 0
+
+    if premium <= 0:
+        return None
+    if iv > 1.0:
+        return None
+
+    score = 0
+    score += (1 - abs(abs(delta) - 0.45)) * 30
+    score += (1 - abs(dte - 25) / 25) * 20
+    score += (1 - strike_diff) * 20
+    score += min(oi / 1000, 1) * 15
+    score += min(volume / 500, 1) * 10
+    if bid > 0 and ask > 0:
+        score += (1 - spread_pct) * 5
+
+    return round(score, 2)
+
 
 def get_options_data(ticker, direction):
     try:
         contract_type = "call" if direction == "LONG" else "put"
         today = datetime.now()
-        min_expiry = today + timedelta(days=14)
-        max_expiry = today + timedelta(days=45)
+        min_expiry = today + timedelta(days=15)
+        max_expiry = today + timedelta(days=35)
 
         url = "https://api.polygon.io/v3/reference/options/contracts"
         params = {
@@ -34,7 +153,7 @@ def get_options_data(ticker, direction):
             "contract_type": contract_type,
             "expiration_date.gte": min_expiry.strftime("%Y-%m-%d"),
             "expiration_date.lte": max_expiry.strftime("%Y-%m-%d"),
-            "limit": 50,
+            "limit": 100,
             "sort": "expiration_date",
             "apiKey": POLYGON_API_KEY
         }
@@ -47,46 +166,48 @@ def get_options_data(ticker, direction):
 
         stock = yf.Ticker(ticker)
         current_price = stock.fast_info.get("lastPrice") or stock.info.get("regularMarketPrice", 0)
-
         if not current_price:
             return None
 
         best_contract = None
-        best_score = float("inf")
+        best_snapshot = None
+        best_score = -1
 
         for contract in data["results"]:
-            strike = contract.get("strike_price", 0)
-            if not strike:
+            ticker_symbol = contract.get("ticker", "")
+            if not ticker_symbol:
                 continue
-            diff = abs(strike - current_price) / current_price
-            if diff < best_score and diff <= 0.05:
-                best_score = diff
+            snapshot = get_option_snapshot(ticker_symbol)
+            if not snapshot:
+                continue
+            score = score_contract(contract, snapshot, current_price, direction)
+            if score is not None and score > best_score:
+                best_score = score
                 best_contract = contract
-
-        if not best_contract and data["results"]:
-            best_contract = min(
-                data["results"],
-                key=lambda c: abs(c.get("strike_price", 0) - current_price)
-            )
+                best_snapshot = snapshot
 
         if not best_contract:
             return None
 
-        ticker_symbol = best_contract.get("ticker", "")
-        expiry = best_contract.get("expiration_date", "")
-        strike = best_contract.get("strike_price", 0)
-
-        snapshot = get_option_snapshot(ticker_symbol)
+        expiry_str = best_contract.get("expiration_date", "")
+        try:
+            dte = (datetime.strptime(expiry_str, "%Y-%m-%d") - datetime.now()).days
+        except:
+            dte = 0
 
         return {
             "type": contract_type.upper(),
-            "strike": strike,
-            "expiry": expiry,
-            "premium": snapshot.get("premium", 0),
-            "delta": snapshot.get("delta", 0),
-            "volume": snapshot.get("volume", 0),
-            "oi": snapshot.get("oi", 0),
-            "symbol": ticker_symbol
+            "strike": best_contract.get("strike_price", 0),
+            "expiry": expiry_str,
+            "dte": dte,
+            "premium": best_snapshot.get("premium", 0),
+            "delta": best_snapshot.get("delta", 0),
+            "volume": best_snapshot.get("volume", 0),
+            "oi": best_snapshot.get("oi", 0),
+            "iv": best_snapshot.get("iv", 0),
+            "bid": best_snapshot.get("bid", 0),
+            "ask": best_snapshot.get("ask", 0),
+            "symbol": best_contract.get("ticker", "")
         }
 
     except Exception as e:
@@ -112,7 +233,10 @@ def get_option_snapshot(option_ticker):
             "premium": round(day.get("close", 0) or day.get("last", 0), 2),
             "delta": round(greeks.get("delta", 0), 3),
             "volume": int(day.get("volume", 0)),
-            "oi": int(result.get("open_interest", 0))
+            "oi": int(result.get("open_interest", 0)),
+            "iv": round(result.get("implied_volatility", 0), 3),
+            "bid": round(day.get("open", 0), 2),
+            "ask": round(day.get("close", 0), 2),
         }
     except Exception as e:
         print(f"Snapshot error {option_ticker}: {e}")
@@ -177,8 +301,11 @@ def analyze_biotech(ticker):
                 "direction": "LONG",
                 "price": round(price, 2),
                 "stop": stop,
+                "stop_pct": round((price - stop) / price * 100, 1),
                 "t1": t1,
+                "t1_pct": round((t1 - price) / price * 100, 1),
                 "t2": t2,
+                "t2_pct": round((t2 - price) / price * 100, 1),
                 "rr": rr,
                 "reason": [
                     f"Volume Spike {int(vol_now/vol_avg*100)}% من المتوسط",
@@ -233,7 +360,7 @@ def analyze(ticker, sector, regime):
     if direction is None:
         if price > resistance * 1.002 and vol_now > vol_avg * 1.3 and rsi_val > 50:
             direction = "LONG"
-            reason.append(f"Breakout فوق {resistance:.2f}")
+            reason.append(f"Breakout فوق ${resistance:.2f}")
             reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
             confidence += 20
         elif price > ma50_val and abs(price - ma20_val) / price < 0.01 and rsi_val < 45:
@@ -243,7 +370,7 @@ def analyze(ticker, sector, regime):
             confidence += 15
         elif price < support * 0.998 and vol_now > vol_avg * 1.3 and rsi_val < 50:
             direction = "SHORT"
-            reason.append(f"Breakdown تحت {support:.2f}")
+            reason.append(f"Breakdown تحت ${support:.2f}")
             reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
             confidence += 20
 
@@ -284,8 +411,11 @@ def analyze(ticker, sector, regime):
         "direction": direction,
         "price": round(price, 2),
         "stop": stop,
+        "stop_pct": round(abs(price - stop) / price * 100, 1),
         "t1": t1,
+        "t1_pct": round(abs(t1 - price) / price * 100, 1),
         "t2": t2,
+        "t2_pct": round(abs(t2 - price) / price * 100, 1),
         "rr": rr,
         "reason": reason,
         "confidence": confidence
@@ -296,60 +426,83 @@ def analyze(ticker, sector, regime):
 # TELEGRAM MESSAGE
 # ─────────────────────────────────────────
 
-def send_signal(s, regime):
+def send_signal(s, regime, rank):
     opt = get_options_data(s["ticker"], s["direction"])
+    action, action_reasons = get_action(s, opt)
+
+    medal = {1: "🥇", 2: "🥈", 3: "🥉", 4: "4️⃣", 5: "5️⃣"}
+    direction_icon = "📈 LONG" if s["direction"] == "LONG" else "📉 SHORT"
+    regime_icon = "🟢 Bull Market" if regime == "BULL" else "🔴 Bear Market"
 
     msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
-🚨 HAKEM TRADE ALERT
+{medal[rank]} HAKEM SIGNAL #{rank}
+━━━━━━━━━━━━━━━━━━━━━━━
+📌 {s['ticker']} — {s['sector']}
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-السهم: {s['ticker']} ({s['sector']})
-الاتجاه: {"📈 LONG" if s['direction']=='LONG' else "📉 SHORT"}
-السوق: {"🟢 Bull" if regime=='BULL' else "🔴 Bear"}
+{direction_icon}  |  {regime_icon}
 
-سبب الدخول:
 """
     for r in s["reason"]:
         msg += f"• {r}\n"
 
     msg += f"""
-Entry:  {s['price']}
-Stop:   {s['stop']}
-T1:     {s['t1']}
-T2:     {s['t2']}
-R/R:    1:{s['rr']}
+━━━━━━━━━━━━━━━━━━━━━━━
+💰 TRADE SETUP
+━━━━━━━━━━━━━━━━━━━━━━━
+Entry  ▸  ${s['price']}
+Stop   ▸  ${s['stop']}  (-{s['stop_pct']}%)
+T1     ▸  ${s['t1']}  (+{s['t1_pct']}%)
+T2     ▸  ${s['t2']}  (+{s['t2_pct']}%)
+R/R    ▸  1 : {s['rr']}
 """
 
     if opt and opt.get("premium", 0) > 0:
-        delta_bar = "🟢" if opt["delta"] > 0.5 else "🟡" if opt["delta"] > 0.3 else "🔴"
+        delta_val = opt["delta"]
+        delta_icon = "🟢" if abs(delta_val) >= 0.45 else "🟡" if abs(delta_val) >= 0.35 else "🔴"
+        iv_pct = round(opt["iv"] * 100, 1) if opt.get("iv") else 0
+        iv_icon = "✅" if iv_pct < 60 else "⚠️"
+        spread = round(opt.get("ask", 0) - opt.get("bid", 0), 2)
+
         msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━
-📊 OPTIONS PLAY
+🎯 OPTIONS PLAY
 ━━━━━━━━━━━━━━━━━━━━━━━
-النوع:    {opt['type']}
-Strike:   ${opt['strike']}
-Expiry:   {opt['expiry']}
-Premium:  ${opt['premium']}
-Delta:    {opt['delta']} {delta_bar}
-Volume:   {opt['volume']:,}
-OI:       {opt['oi']:,}
+{opt['type']}  ${opt['strike']}  |  {opt['dte']} DTE
+─────────────────────────
+Premium  ▸  ${opt['premium']}
+Delta    ▸  {delta_val}  {delta_icon}
+IV       ▸  {iv_pct}%  {iv_icon}
+Spread   ▸  ${spread}
+─────────────────────────
+Volume   ▸  {opt['volume']:,}
+OI       ▸  {opt['oi']:,}
 """
     else:
         msg += """
 ━━━━━━━━━━━━━━━━━━━━━━━
-📊 OPTIONS
-⚠️ لا تتوفر بيانات Options حالياً
+🎯 OPTIONS
+⚠️ لا يوجد عقد يطابق معايير HAKEM
 """
 
     msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━
-⭐ Confidence: {s['confidence']}/100
+⭐ Confidence  {s['confidence']} / 100
 ━━━━━━━━━━━━━━━━━━━━━━━
-📡 HAKEM CONSULTING"""
+{action}"""
+
+    if action_reasons:
+        for r in action_reasons:
+            msg += f"\n  · {r}"
+
+    msg += f"""
+━━━━━━━━━━━━━━━━━━━━━━━
+        📡 HAKEM CONSULTING
+━━━━━━━━━━━━━━━━━━━━━━━"""
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    result = requests.post(url, json={"chat_id": CHAT_ID, "text": msg}).json()
-    print(result)
+    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+    print(f"Sent: {s['ticker']} #{rank} — {action}")
 
 
 # ─────────────────────────────────────────
@@ -364,7 +517,7 @@ def run():
     regime = get_spy_regime()
     print(f"Market Regime: {regime}")
 
-    best = None
+    signals = []
 
     for sector, tickers in WATCHLIST.items():
         for ticker in tickers:
@@ -374,13 +527,15 @@ def run():
                 else:
                     signal = analyze(ticker, sector, regime)
                 if signal:
-                    if best is None or signal["confidence"] > best["confidence"]:
-                        best = signal
+                    signals.append(signal)
             except Exception as e:
                 print(f"Error {ticker}: {e}")
 
-    if best:
-        send_signal(best, regime)
+    signals = sorted(signals, key=lambda x: x["confidence"], reverse=True)[:5]
+
+    if signals:
+        for i, signal in enumerate(signals, 1):
+            send_signal(signal, regime, i)
     else:
         print("No signals found")
 
