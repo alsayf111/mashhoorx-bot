@@ -1,7 +1,8 @@
 import os
 import requests
 import yfinance as yf
-import pandas as pd
+from datetime import datetime
+import pytz
 
 TELEGRAM_TOKEN = "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68"
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
@@ -11,16 +12,68 @@ WATCHLIST = {
     "Materials": ["LIN","APD","CAT","DE","HON"],
     "Communication": ["NFLX","META","GOOGL"],
     "Staples": ["PEP","KO","WMT","COST"],
-    "Technology": ["NVDA","AAPL","MSFT","AMD"]
+    "Technology": ["NVDA","AAPL","MSFT","AMD"],
+    "Biotech": ["MRNA","NVAX","SAVA","ACAD","IONS","BEAM","RXRX","NTLA","CRSP","EDIT"]
 }
 
-def get_data(ticker):
-    df = yf.download(ticker, period="60d", interval="1d", progress=False)
-    return df
+def is_market_open():
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny)
+    if now.weekday() >= 5:
+        return False
+    market_open = now.replace(hour=9, minute=30, second=0)
+    market_close = now.replace(hour=16, minute=0, second=0)
+    return market_open <= now <= market_close
 
-def analyze(ticker, sector):
+def get_spy_regime():
+    try:
+        df = yf.download("SPY", period="30d", interval="1d", progress=False)
+        close = df["Close"]
+        ma20 = float(close.rolling(20).mean().iloc[-1])
+        price = float(close.iloc[-1])
+        return "BULL" if price > ma20 else "BEAR"
+    except:
+        return "BULL"
+
+def get_data(ticker):
+    try:
+        df = yf.download(ticker, period="60d", interval="1d", progress=False)
+        return df if len(df) >= 30 else None
+    except:
+        return None
+
+def analyze_biotech(ticker):
     df = get_data(ticker)
-    if df is None or len(df) < 30:
+    if df is None:
+        return None
+    volume = df["Volume"]
+    close = df["Close"]
+    vol_avg = float(volume.rolling(20).mean().iloc[-1])
+    vol_now = float(volume.iloc[-1])
+    price = float(close.iloc[-1])
+    if vol_now > vol_avg * 3:
+        stop = round(price * 0.92, 2)
+        t1 = round(price * 1.15, 2)
+        t2 = round(price * 1.30, 2)
+        rr = round((t1 - price) / (price - stop), 2)
+        if rr >= 1.5:
+            return {
+                "ticker": ticker,
+                "sector": "Biotech 🧬",
+                "direction": "LONG",
+                "price": round(price, 2),
+                "stop": stop,
+                "t1": t1,
+                "t2": t2,
+                "rr": rr,
+                "reason": [f"Volume Spike {int(vol_now/vol_avg*100)}% من المتوسط", "احتمال خبر FDA قادم"],
+                "confidence": 70
+            }
+    return None
+
+def analyze(ticker, sector, regime):
+    df = get_data(ticker)
+    if df is None:
         return None
 
     close = df["Close"]
@@ -34,8 +87,7 @@ def analyze(ticker, sector):
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
+    rsi = 100 - (100 / (1 + gain / loss))
 
     price = float(close.iloc[-1])
     rsi_val = float(rsi.iloc[-1])
@@ -43,7 +95,6 @@ def analyze(ticker, sector):
     ma50_val = float(ma50.iloc[-1])
     vol_avg = float(volume.rolling(20).mean().iloc[-1])
     vol_now = float(volume.iloc[-1])
-
     resistance = float(high.rolling(20).max().iloc[-2])
     support = float(low.rolling(20).min().iloc[-2])
 
@@ -51,26 +102,32 @@ def analyze(ticker, sector):
     reason = []
     confidence = 50
 
-    # Breakout LONG
-    if price > resistance * 1.002 and vol_now > vol_avg * 1.3 and rsi_val > 50:
-        direction = "LONG"
-        reason.append(f"Breakout فوق {resistance:.2f}")
-        reason.append(f"Volume مرتفع {int(vol_now/vol_avg*100)}%")
-        confidence += 20
+    if sector == "Technology" and regime == "BEAR":
+        return None
 
-    # Pullback LONG
-    elif price > ma50_val and abs(price - ma20_val) / price < 0.01 and rsi_val < 45:
-        direction = "LONG"
-        reason.append(f"Pullback على MA20")
-        reason.append(f"RSI {rsi_val:.0f} منطقة شراء")
-        confidence += 15
+    if sector == "Staples" and regime == "BULL":
+        if price < support * 0.998 and vol_now > vol_avg * 1.3:
+            direction = "SHORT"
+            reason.append(f"Breakdown في Staples — سوق صاعد")
+            reason.append(f"Volume مرتفع {int(vol_now/vol_avg*100)}%")
+            confidence += 15
 
-    # SHORT Breakdown
-    elif price < support * 0.998 and vol_now > vol_avg * 1.3 and rsi_val < 50:
-        direction = "SHORT"
-        reason.append(f"Breakdown تحت {support:.2f}")
-        reason.append(f"Volume مرتفع {int(vol_now/vol_avg*100)}%")
-        confidence += 20
+    if direction is None:
+        if price > resistance * 1.002 and vol_now > vol_avg * 1.3 and rsi_val > 50:
+            direction = "LONG"
+            reason.append(f"Breakout فوق {resistance:.2f}")
+            reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
+            confidence += 20
+        elif price > ma50_val and abs(price - ma20_val)/price < 0.01 and rsi_val < 45:
+            direction = "LONG"
+            reason.append("Pullback على MA20")
+            reason.append(f"RSI {rsi_val:.0f} منطقة شراء")
+            confidence += 15
+        elif price < support * 0.998 and vol_now > vol_avg * 1.3 and rsi_val < 50:
+            direction = "SHORT"
+            reason.append(f"Breakdown تحت {support:.2f}")
+            reason.append(f"Volume {int(vol_now/vol_avg*100)}% من المتوسط")
+            confidence += 20
 
     if direction is None:
         return None
@@ -100,6 +157,9 @@ def analyze(ticker, sector):
 
     confidence = min(confidence, 95)
 
+    if confidence < 65:
+        return None
+
     return {
         "ticker": ticker,
         "sector": sector,
@@ -109,18 +169,18 @@ def analyze(ticker, sector):
         "t1": t1,
         "t2": t2,
         "rr": rr,
-        "rsi": round(rsi_val, 1),
         "reason": reason,
         "confidence": confidence
     }
 
-def send_signal(s):
+def send_signal(s, regime):
     msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
 🚨 HAKEM TRADE ALERT
 ━━━━━━━━━━━━━━━━━━━━━━━
 
 السهم: {s['ticker']} ({s['sector']})
 الاتجاه: {"📈 LONG" if s['direction']=='LONG' else "📉 SHORT"}
+السوق: {"🟢 Bull" if regime=='BULL' else "🔴 Bear"}
 
 سبب الدخول:
 """
@@ -139,16 +199,26 @@ R/R: 1:{s['rr']}
 ━━━━━━━━━━━━━━━━━━━━━━━"""
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": msg}
-    result = requests.post(url, json=payload).json()
+    result = requests.post(url, json={"chat_id": CHAT_ID, "text": msg}).json()
     print(result)
 
 def run():
+    if not is_market_open():
+        print("السوق مغلق")
+        return
+
+    regime = get_spy_regime()
+    print(f"Market Regime: {regime}")
+
     best = None
+
     for sector, tickers in WATCHLIST.items():
         for ticker in tickers:
             try:
-                signal = analyze(ticker, sector)
+                if sector == "Biotech":
+                    signal = analyze_biotech(ticker)
+                else:
+                    signal = analyze(ticker, sector, regime)
                 if signal:
                     if best is None or signal['confidence'] > best['confidence']:
                         best = signal
@@ -156,7 +226,7 @@ def run():
                 print(f"Error {ticker}: {e}")
 
     if best:
-        send_signal(best)
+        send_signal(best, regime)
     else:
         print("No signals found")
 
