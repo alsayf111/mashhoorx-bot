@@ -4,6 +4,7 @@ import yfinance as yf
 import numpy as np
 from datetime import datetime
 import pytz
+from hakem_logger import log_sa_signal
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAHIhk-64LtEcYcBWKBJ8RG6s6LPpPJpd68")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
@@ -83,7 +84,6 @@ def detect_candle_patterns(df):
     def is_green(i): return c[i] > o[i]
     def is_red(i): return c[i] < o[i]
 
-    # ── 3 White Soldiers 🏆 ──
     if (is_green(-3) and is_green(-2) and is_green(-1) and
         c[-2] > c[-3] and c[-1] > c[-2] and
         o[-2] > o[-3] and o[-2] < c[-3] and
@@ -93,26 +93,22 @@ def detect_candle_patterns(df):
         full(-3) > 0 and body(-3)/full(-3) > 0.6):
         patterns.append(("3 White Soldiers", 90))
 
-    # ── Marubozu ──
     if (is_green(-1) and full(-1) > 0 and
         body(-1)/full(-1) > 0.9 and
         upper(-1) < body(-1)*0.05 and
         lower(-1) < body(-1)*0.05):
         patterns.append(("Marubozu", 75))
 
-    # ── Bullish Engulfing ──
     if (is_red(-2) and is_green(-1) and
         o[-1] < c[-2] and c[-1] > o[-2]):
         patterns.append(("Bullish Engulfing", 70))
 
-    # ── Morning Star ──
     if (is_red(-3) and
         body(-2) < body(-3)*0.3 and
         is_green(-1) and
         c[-1] > (o[-3] + c[-3])/2):
         patterns.append(("Morning Star", 72))
 
-    # ── Hammer ──
     if (full(-1) > 0 and
         body(-1)/full(-1) < 0.35 and
         lower(-1) > body(-1)*2 and
@@ -120,7 +116,6 @@ def detect_candle_patterns(df):
         c[-4] > c[-1]):
         patterns.append(("Hammer", 65))
 
-    # ── Inverted Hammer ──
     if (full(-1) > 0 and
         body(-1) > 0 and
         upper(-1) >= body(-1)*2 and
@@ -128,13 +123,11 @@ def detect_candle_patterns(df):
         c[-4] > c[-1]):
         patterns.append(("Inverted Hammer", 62))
 
-    # ── Piercing Line ──
     if (is_red(-2) and is_green(-1) and
         o[-1] < l[-2] and
         c[-1] > (o[-2] + c[-2])/2):
         patterns.append(("Piercing Line", 68))
 
-    # ── Bullish Harami ──
     if (is_red(-2) and is_green(-1) and
         o[-1] > c[-2] and c[-1] < o[-2]):
         patterns.append(("Bullish Harami", 60))
@@ -153,7 +146,6 @@ def detect_chart_patterns(df):
     low = df["Low"].values.astype(float)
     n = len(close)
 
-    # ── Ascending Triangle ──
     try:
         highs_20 = high[-20:]
         lows_20 = low[-20:]
@@ -165,7 +157,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Symmetrical Triangle ──
     try:
         highs_30 = high[-30:]
         lows_30 = low[-30:]
@@ -177,7 +168,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Bullish Wedge (Falling Wedge) ──
     try:
         highs_25 = high[-25:]
         lows_25 = low[-25:]
@@ -189,7 +179,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Double Bottom (W) ──
     try:
         lows_40 = low[-40:]
         min1_idx = np.argmin(lows_40[:20])
@@ -201,7 +190,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Inverse Head & Shoulders ──
     try:
         lows_50 = low[-50:]
         left = np.min(lows_50[:15])
@@ -214,7 +202,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Cup and Handle ──
     try:
         if n >= 50:
             cup_low = np.min(close[-50:-10])
@@ -229,7 +216,6 @@ def detect_chart_patterns(df):
     except:
         pass
 
-    # ── Bullish Flag ──
     try:
         pole_gain = (close[-15] - close[-25]) / close[-25]
         flag_slope = np.polyfit(range(10), close[-10:], 1)[0]
@@ -276,46 +262,34 @@ def analyze(ticker, sector, market_state, regime):
     vol_avg = float(volume.rolling(20).mean().iloc[-1])
     vol_now = float(volume.iloc[-1])
 
-    # فلتر السيولة
     if price * vol_now < 500_000:
         return None
 
-    # ATR
     tr = np.maximum(high - low, np.maximum(abs(high - close.shift(1)), abs(low - close.shift(1))))
     atr = float(tr.rolling(14).mean().iloc[-1])
     atr_pct = atr / price
 
-    # EMA20
     ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
-
-    # MA20
     ma20 = float(close.rolling(20).mean().iloc[-1])
 
-    # RSI
     delta = close.diff()
     gain = delta.where(delta > 0, 0).rolling(14).mean()
     loss = -delta.where(delta < 0, 0).rolling(14).mean()
     rsi = float((100 - (100 / (1 + gain / loss))).iloc[-1])
 
-    # Support & Resistance
     support, resistance, near_resistance, above_support = get_key_levels(df)
 
-    # Patterns
     candle_patterns = detect_candle_patterns(df)
     chart_patterns = detect_chart_patterns(df)
 
     if not candle_patterns and not chart_patterns:
         return None
 
-    # أقوى نمط
     best_candle = max(candle_patterns, key=lambda x: x[1]) if candle_patterns else None
     best_chart = max(chart_patterns, key=lambda x: x[1]) if chart_patterns else None
 
     results = []
 
-    # ══════════════════════════════
-    # 🔵 TRACK A — فكرة Muhannad
-    # ══════════════════════════════
     a_patterns = candle_patterns + chart_patterns
     if a_patterns and vol_now > vol_avg * 1.1:
         top = max(a_patterns, key=lambda x: x[1])
@@ -336,6 +310,7 @@ def analyze(ticker, sector, market_state, regime):
                     "ticker": ticker.replace(".SR", ""),
                     "sector": sector,
                     "pattern": top[0],
+                    "direction": "شراء",
                     "price": round(price, 2),
                     "stop": stop,
                     "stop_pct": round(abs(price-stop)/price*100, 1),
@@ -349,9 +324,6 @@ def analyze(ticker, sector, market_state, regime):
                     "market_state": market_state
                 })
 
-    # ══════════════════════════════
-    # 🟠 TRACK B — فكرة HAKEM
-    # ══════════════════════════════
     b_candle = None
     for p in candle_patterns:
         if p[0] == "3 White Soldiers":
@@ -392,6 +364,7 @@ def analyze(ticker, sector, market_state, regime):
                     "ticker": ticker.replace(".SR", ""),
                     "sector": sector,
                     "pattern": b_top[0],
+                    "direction": "شراء",
                     "price": round(price, 2),
                     "stop": stop,
                     "stop_pct": round(abs(price-stop)/price*100, 1),
@@ -405,9 +378,6 @@ def analyze(ticker, sector, market_state, regime):
                     "market_state": market_state
                 })
 
-    # ══════════════════════════════
-    # 🟣 TRACK C — المشترك
-    # ══════════════════════════════
     c_patterns = candle_patterns + chart_patterns
     if c_patterns and price > ema20 and vol_now > vol_avg * 1.2:
         top = max(c_patterns, key=lambda x: x[1])
@@ -438,6 +408,7 @@ def analyze(ticker, sector, market_state, regime):
                     "ticker": ticker.replace(".SR", ""),
                     "sector": sector,
                     "pattern": top[0],
+                    "direction": "شراء",
                     "price": round(price, 2),
                     "stop": stop,
                     "stop_pct": round(abs(price-stop)/price*100, 1),
@@ -523,7 +494,8 @@ def send_signal(s, regime):
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
-    print(f"Sent: {s['ticker']} Track {s['track']} — {action}")
+    log_sa_signal(s, regime, s["market_state"], action)
+    print(f"Sent SA: {s['ticker']} Track {s['track']} — {action}")
 
 
 # ─────────────────────────────────────────
