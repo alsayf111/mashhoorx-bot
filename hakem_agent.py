@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 from hakem_logger import log_us_signal
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAE-NpNtWFCd4Nasjce7pFUx6CLZfWI7U5Q")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAF63mIxzhoB2iFjVe9w8FhGSshlMsOsvR4")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "7A1Rlo0TESCjHDqDs5T2lrdStLgTgpRV")
 
