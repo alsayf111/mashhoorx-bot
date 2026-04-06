@@ -10,6 +10,19 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAF63mIxzhoB2iFjVe
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "7A1Rlo0TESCjHDqDs5T2lrdStLgTgpRV")
 
+
+# ─────────────────────────────────────────
+# TELEGRAM
+# ─────────────────────────────────────────
+
+def telegram_send(text):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+
 WATCHLIST = {
     "Energy": ["XOM", "CVX", "OXY", "SLB", "HAL", "MPC"],
     "Materials": ["LIN", "APD", "CAT", "DE", "HON"],
@@ -549,7 +562,6 @@ def analyze(ticker, sector, market_state, regime):
             "market_state": market_state
         }
 
-    # TRACK A LONG
     if all_bull and vol_now > vol_avg * 1.1:
         top = max(all_bull, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
@@ -559,7 +571,6 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("A", "🔵 Signal A — Price Action", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    # TRACK A SHORT
     if all_bear and vol_now > vol_avg * 1.1:
         top = max(all_bear, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
@@ -569,7 +580,6 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("A", "🔵 Signal A — Price Action", "SHORT", top[0], conf, reason)
             if s: results.append(s)
 
-    # TRACK B LONG
     b_long = None
     for p in bull_candles:
         if p[0] == "3 White Soldiers": b_long = p; break
@@ -587,7 +597,6 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "LONG", b_long[0], conf, reason)
             if s: results.append(s)
 
-    # TRACK B SHORT
     b_short = None
     for p in bear_candles:
         if p[0] == "3 Black Crows": b_short = p; break
@@ -605,7 +614,6 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "SHORT", b_short[0], conf, reason)
             if s: results.append(s)
 
-    # TRACK C LONG
     if all_bull and price > ema20 and vol_now > vol_avg * 1.2:
         top = max(all_bull, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
@@ -618,7 +626,6 @@ def analyze(ticker, sector, market_state, regime):
             s = make_signal("C", "🟣 Signal C — Combined", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    # TRACK C SHORT
     if all_bear and price < ema20 and vol_now > vol_avg * 1.2:
         top = max(all_bear, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
@@ -660,7 +667,7 @@ def get_action(signal):
 
 
 # ─────────────────────────────────────────
-# TELEGRAM MESSAGE
+# SEND SIGNAL
 # ─────────────────────────────────────────
 
 def send_signal(s, regime):
@@ -700,7 +707,6 @@ R/R    ▸  1 : {s['rr']}
         iv_pct = round(opt["iv"] * 100, 1) if opt.get("iv") else 0
         iv_icon = "✅" if iv_pct < 60 else "⚠️"
         spread = round(opt.get("ask", 0) - opt.get("bid", 0), 2)
-
         msg += f"""
 ━━━━━━━━━━━━━━━━━━━━━━━
 🎯 OPTIONS PLAY
@@ -737,8 +743,7 @@ OI       ▸  {opt['oi']:,}
         📡 HAKEM CONSULTING
 ━━━━━━━━━━━━━━━━━━━━━━━"""
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={"chat_id": CHAT_ID, "text": msg})
+    telegram_send(msg)
     log_us_signal(s, regime, s["market_state"], action)
     print(f"Sent: {s['ticker']} {s['direction']} Track {s['track']} — {action}")
 
@@ -817,4 +822,3 @@ def run():
 
 if __name__ == "__main__":
     run()
-
