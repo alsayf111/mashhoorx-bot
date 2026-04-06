@@ -6,7 +6,7 @@ from datetime import datetime
 import pytz
 from hakem_logger import log_sa_signal
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAE-NpNtWFCd4Nasjce7pFUx6CLZfWI7U5Q")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8719936616:AAF63mIxzhoB2iFjVe9w8FhGSshlMsOsvR4")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 
 WATCHLIST_SA = {
