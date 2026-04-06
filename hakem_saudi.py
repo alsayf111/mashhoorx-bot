@@ -9,6 +9,13 @@ from hakem_logger import log_sa_signal
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 
+def telegram_send(text):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text})
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
 WATCHLIST_SA = {
     "الطاقة": ["2222.SR", "2030.SR", "4030.SR", "2381.SR"],
     "البنوك": ["1180.SR", "1120.SR", "1050.SR", "1060.SR", "1080.SR", "1010.SR", "1020.SR", "1030.SR", "1040.SR", "1150.SR", "1160.SR", "2110.SR"],
