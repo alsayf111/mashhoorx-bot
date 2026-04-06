@@ -748,59 +748,73 @@ OI       ▸  {opt['oi']:,}
 # ─────────────────────────────────────────
 
 def run():
-    if not is_market_open():
-        print("السوق مغلق")
-        return
+    try:
+        if not is_market_open():
+            print("السوق مغلق")
+            return
 
-    market_state, regime = get_market_state()
-    print(f"Market: {market_state} | Regime: {regime}")
+        market_state, regime = get_market_state()
+        print(f"Market: {market_state} | Regime: {regime}")
 
-    best_a_long = None
-    best_a_short = None
-    best_b_long = None
-    best_b_short = None
-    best_c_long = None
-    best_c_short = None
+        best_a_long = None
+        best_a_short = None
+        best_b_long = None
+        best_b_short = None
+        best_c_long = None
+        best_c_short = None
 
-    for sector, tickers in WATCHLIST.items():
-        for ticker in tickers:
-            try:
-                results = analyze(ticker, sector, market_state, regime)
-                if not results:
-                    continue
-                for signal in results:
-                    t = signal["track"]
-                    d = signal["direction"]
-                    if t == "A" and d == "LONG":
-                        if best_a_long is None or signal["confidence"] > best_a_long["confidence"]:
-                            best_a_long = signal
-                    elif t == "A" and d == "SHORT":
-                        if best_a_short is None or signal["confidence"] > best_a_short["confidence"]:
-                            best_a_short = signal
-                    elif t == "B" and d == "LONG":
-                        if best_b_long is None or signal["confidence"] > best_b_long["confidence"]:
-                            best_b_long = signal
-                    elif t == "B" and d == "SHORT":
-                        if best_b_short is None or signal["confidence"] > best_b_short["confidence"]:
-                            best_b_short = signal
-                    elif t == "C" and d == "LONG":
-                        if best_c_long is None or signal["confidence"] > best_c_long["confidence"]:
-                            best_c_long = signal
-                    elif t == "C" and d == "SHORT":
-                        if best_c_short is None or signal["confidence"] > best_c_short["confidence"]:
-                            best_c_short = signal
-            except Exception as e:
-                print(f"Error {ticker}: {e}")
+        for sector, tickers in WATCHLIST.items():
+            for ticker in tickers:
+                try:
+                    results = analyze(ticker, sector, market_state, regime)
+                    if not results:
+                        continue
+                    for signal in results:
+                        t = signal["track"]
+                        d = signal["direction"]
+                        if t == "A" and d == "LONG":
+                            if best_a_long is None or signal["confidence"] > best_a_long["confidence"]:
+                                best_a_long = signal
+                        elif t == "A" and d == "SHORT":
+                            if best_a_short is None or signal["confidence"] > best_a_short["confidence"]:
+                                best_a_short = signal
+                        elif t == "B" and d == "LONG":
+                            if best_b_long is None or signal["confidence"] > best_b_long["confidence"]:
+                                best_b_long = signal
+                        elif t == "B" and d == "SHORT":
+                            if best_b_short is None or signal["confidence"] > best_b_short["confidence"]:
+                                best_b_short = signal
+                        elif t == "C" and d == "LONG":
+                            if best_c_long is None or signal["confidence"] > best_c_long["confidence"]:
+                                best_c_long = signal
+                        elif t == "C" and d == "SHORT":
+                            if best_c_short is None or signal["confidence"] > best_c_short["confidence"]:
+                                best_c_short = signal
+                except Exception as e:
+                    print(f"Error {ticker}: {e}")
 
-    sent = False
-    for signal in [best_a_long, best_a_short, best_b_long, best_b_short, best_c_long, best_c_short]:
-        if signal:
-            send_signal(signal, regime)
-            sent = True
+        sent = False
+        for signal in [best_a_long, best_a_short, best_b_long, best_b_short, best_c_long, best_c_short]:
+            if signal:
+                send_signal(signal, regime)
+                sent = True
 
-    if not sent:
-        print("No signals found")
+        if sent:
+            telegram_send("✅ System OK — Signals Sent 🇺🇸")
+        else:
+            telegram_send("📭 🇺🇸 اليوم: لا توجد إشارات أمريكية\nالنظام عمل بشكل طبيعي ✅")
+
+    except Exception as e:
+        telegram_send(f"""━━━━━━━━━━━━━━━━━━━━━━━
+❌ HAKEM US ERROR
+━━━━━━━━━━━━━━━━━━━━━━━
+
+{str(e)}
+
+━━━━━━━━━━━━━━━━━━━━━━━""")
+        print(f"FATAL ERROR: {e}")
 
 
 if __name__ == "__main__":
     run()
+
