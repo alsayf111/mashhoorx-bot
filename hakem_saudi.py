@@ -34,7 +34,7 @@ def is_market_open():
     if now.weekday() in [4, 5]:
         return False
     market_open = now.replace(hour=10, minute=0, second=0)
-    market_close = now.replace(hour=15, minute=0, second=0)
+    market_close = now.replace(hour=16, minute=0, second=0)
     return market_open <= now <= market_close
 
 
