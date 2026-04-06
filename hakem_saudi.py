@@ -503,45 +503,64 @@ def send_signal(s, regime):
 # ─────────────────────────────────────────
 
 def run():
-    if not is_market_open():
-        print("السوق السعودي مغلق")
-        return
+    try:
+        if not is_market_open():
+            print("السوق السعودي مغلق")
+            return
 
-    market_state, regime = get_market_state()
-    print(f"Market: {market_state} | Regime: {regime}")
+        market_state, regime = get_market_state()
+        print(f"Market: {market_state} | Regime: {regime}")
 
-    best_a = None
-    best_b = None
-    best_c = None
+        best_a = None
+        best_b = None
+        best_c = None
 
-    for sector, tickers in WATCHLIST_SA.items():
-        for ticker in tickers:
-            try:
-                results = analyze(ticker, sector, market_state, regime)
-                if not results:
-                    continue
-                for signal in results:
-                    if signal["track"] == "A":
-                        if best_a is None or signal["confidence"] > best_a["confidence"]:
-                            best_a = signal
-                    elif signal["track"] == "B":
-                        if best_b is None or signal["confidence"] > best_b["confidence"]:
-                            best_b = signal
-                    elif signal["track"] == "C":
-                        if best_c is None or signal["confidence"] > best_c["confidence"]:
-                            best_c = signal
-            except Exception as e:
-                print(f"Error {ticker}: {e}")
+        for sector, tickers in WATCHLIST_SA.items():
+            for ticker in tickers:
+                try:
+                    results = analyze(ticker, sector, market_state, regime)
+                    if not results:
+                        continue
 
-    sent = False
-    for signal in [best_a, best_b, best_c]:
-        if signal:
-            send_signal(signal, regime)
-            sent = True
+                    for signal in results:
+                        if signal["track"] == "A":
+                            if best_a is None or signal["confidence"] > best_a["confidence"]:
+                                best_a = signal
+                        elif signal["track"] == "B":
+                            if best_b is None or signal["confidence"] > best_b["confidence"]:
+                                best_b = signal
+                        elif signal["track"] == "C":
+                            if best_c is None or signal["confidence"] > best_c["confidence"]:
+                                best_c = signal
 
-    if not sent:
-        print("لا توجد إشارات")
+                except Exception as e:
+                    print(f"Error {ticker}: {e}")
+
+        sent = False
+
+        for signal in [best_a, best_b, best_c]:
+            if signal:
+                send_signal(signal, regime)
+                sent = True
+
+        if sent:
+            telegram_send("✅ System OK — Signals Sent 🇸🇦")
+            print("Signals sent successfully")
+        else:
+            telegram_send("📭 🇸🇦 اليوم: لا توجد إشارات سعودية\nالنظام عمل بشكل طبيعي ✅")
+            print("No signals sent — confirmation message delivered")
+
+    except Exception as e:
+        telegram_send(f"""━━━━━━━━━━━━━━━━━━━━━━━
+❌ HAKEM SA ERROR
+━━━━━━━━━━━━━━━━━━━━━━━
+
+{str(e)}
+
+━━━━━━━━━━━━━━━━━━━━━━━""")
+        print(f"FATAL ERROR: {e}")
 
 
 if __name__ == "__main__":
     run()
+
