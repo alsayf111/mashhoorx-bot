@@ -569,6 +569,9 @@ def send_daily_report(signals_sent, regime, market_state):
 def run(is_final_run=False):
     try:
         if not is_market_open():
+            if is_final_run:
+                market_state, regime = get_market_state()
+                send_daily_report([], regime, market_state)
             print("السوق السعودي مغلق")
             return
 
@@ -576,12 +579,14 @@ def run(is_final_run=False):
         print(f"Market: {market_state} | Regime: {regime}")
 
         if not market_allows_entry(regime, market_state):
-            telegram_send("⛔ السوق هابط ومتوتر — تم إيقاف الإشارات اليوم لحماية رأس المال\n📡 HAKEM CONSULTING")
+            telegram_send(
+                "⛔ السوق هابط ومتوتر — تم إيقاف الإشارات اليوم لحماية رأس المال\n"
+                "📡 HAKEM CONSULTING"
+            )
+            print("BEAR+VOLATILE — signals blocked")
             return
 
-        best_a = None
-        best_b = None
-        best_c = None
+        best_a = best_b = best_c = None
 
         for sector, tickers in WATCHLIST_SA.items():
             for ticker in tickers:
@@ -610,18 +615,21 @@ def run(is_final_run=False):
 
         if signals_sent:
             telegram_send("✅ System OK — Signals Sent 🇸🇦")
+            print("Signals sent successfully")
+        else:
+            print("No signals today")
 
         if is_final_run:
             send_daily_report(signals_sent, regime, market_state)
 
     except Exception as e:
-        telegram_send(f"""━━━━━━━━━━━━━━━━━━━━━━━
-❌ HAKEM SA ERROR
-━━━━━━━━━━━━━━━━━━━━━━━
-
-{str(e)}
-
-━━━━━━━━━━━━━━━━━━━━━━━""")
+        telegram_send(
+            "━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "❌ HAKEM SA ERROR\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{str(e)}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━"
+        )
         print(f"FATAL ERROR: {e}")
 
 if __name__ == "__main__":
