@@ -4,16 +4,11 @@ import yfinance as yf
 import numpy as np
 from datetime import datetime, timedelta
 import pytz
-from hakem_logger import log_us_signal
+import csv
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "5652642650")
 POLYGON_API_KEY = os.environ.get("POLYGON_API_KEY", "7A1Rlo0TESCjHDqDs5T2lrdStLgTgpRV")
-
-
-# ─────────────────────────────────────────
-# TELEGRAM
-# ─────────────────────────────────────────
 
 def telegram_send(text):
     try:
@@ -21,7 +16,6 @@ def telegram_send(text):
         requests.post(url, json={"chat_id": CHAT_ID, "text": text})
     except Exception as e:
         print(f"Telegram error: {e}")
-
 
 WATCHLIST = {
     "Energy": ["XOM", "CVX", "OXY", "SLB", "HAL", "MPC"],
@@ -237,6 +231,61 @@ def get_data(ticker):
         return df if len(df) >= 50 else None
     except:
         return None
+
+
+# ─────────────────────────────────────────
+# ✅ RSI
+# ─────────────────────────────────────────
+
+def calc_rsi(close_series, period=14):
+    delta = close_series.diff()
+    gain = delta.where(delta > 0, 0).rolling(period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(period).mean()
+    rs = gain / loss
+    return float((100 - (100 / (1 + rs))).iloc[-1])
+
+def rsi_valid_long(rsi):
+    return 40 <= rsi <= 65
+
+def rsi_valid_short(rsi):
+    return 35 <= rsi <= 60
+
+
+# ─────────────────────────────────────────
+# ✅ سجل الإشارات CSV
+# ─────────────────────────────────────────
+
+SIGNALS_LOG = "signals_log_us.csv"
+
+def log_signal(signal, regime, market_state, action):
+    sa = pytz.timezone("America/New_York")
+    now = datetime.now(sa).strftime("%Y-%m-%d %H:%M")
+    file_exists = os.path.isfile(SIGNALS_LOG)
+    with open(SIGNALS_LOG, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=[
+            "datetime", "ticker", "sector", "track", "direction", "pattern",
+            "price", "stop", "t1", "t2", "rr",
+            "confidence", "regime", "market_state", "action"
+        ])
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow({
+            "datetime": now,
+            "ticker": signal["ticker"],
+            "sector": signal["sector"],
+            "track": signal["track"],
+            "direction": signal["direction"],
+            "pattern": signal["pattern"],
+            "price": signal["price"],
+            "stop": signal["stop"],
+            "t1": signal["t1"],
+            "t2": signal["t2"],
+            "rr": signal["rr"],
+            "confidence": signal["confidence"],
+            "regime": regime,
+            "market_state": market_state,
+            "action": action,
+        })
 
 
 # ─────────────────────────────────────────
@@ -510,10 +559,8 @@ def analyze(ticker, sector, market_state, regime):
 
     ema20 = float(close.ewm(span=20, adjust=False).mean().iloc[-1])
 
-    delta_s = close.diff()
-    gain = delta_s.where(delta_s > 0, 0).rolling(14).mean()
-    loss = -delta_s.where(delta_s < 0, 0).rolling(14).mean()
-    rsi = float((100 - (100 / (1 + gain / loss))).iloc[-1])
+    # ✅ RSI فعّال
+    rsi = calc_rsi(close)
 
     support = float(low.rolling(20).min().iloc[-2])
     resistance = float(high.rolling(20).max().iloc[-2])
@@ -559,27 +606,37 @@ def analyze(ticker, sector, market_state, regime):
             "rr": rr,
             "reason": reason,
             "confidence": min(conf, 95),
+            "rsi": round(rsi, 1),
             "market_state": market_state
         }
 
-    if all_bull and vol_now > vol_avg * 1.1:
+    # ════════════════════════════════
+    # TRACK A
+    # ✅ أضفنا شرط EMA20 و RSI
+    # ════════════════════════════════
+    if all_bull and vol_now > vol_avg * 1.1 and price > ema20 and rsi_valid_long(rsi):
         top = max(all_bull, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
         if regime == "BULL": conf += 5
-        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if regime == "BEAR": conf -= 10
+        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
         if conf >= 60:
             s = make_signal("A", "🔵 Signal A — Price Action", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    if all_bear and vol_now > vol_avg * 1.1:
+    if all_bear and vol_now > vol_avg * 1.1 and price < ema20 and rsi_valid_short(rsi):
         top = max(all_bear, key=lambda x: x[1])
         conf = 50 + int(top[1] * 0.3)
         if regime == "BEAR": conf += 5
-        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%"]
+        if regime == "BULL": conf -= 10
+        reason = [f"Pattern: {top[0]}", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
         if conf >= 60:
             s = make_signal("A", "🔵 Signal A — Price Action", "SHORT", top[0], conf, reason)
             if s: results.append(s)
 
+    # ════════════════════════════════
+    # TRACK B
+    # ════════════════════════════════
     b_long = None
     for p in bull_candles:
         if p[0] == "3 White Soldiers": b_long = p; break
@@ -588,12 +645,14 @@ def analyze(ticker, sector, market_state, regime):
         for p in bull_charts:
             if p[0] in ["Inverse H&S", "Double Bottom", "Cup & Handle"]: b_long = p; break
 
-    if b_long and price > ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
+    if b_long and price > ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03 and rsi_valid_long(rsi):
         conf = 55 + int(b_long[1] * 0.35)
         if regime == "BULL": conf += 10
+        if regime == "BEAR": conf -= 15
         if market_state == "CALM": conf += 5
-        reason = [f"Pattern: {b_long[0]}", f"Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
-        if conf >= 65:
+        reason = [f"Pattern: {b_long[0]}", "Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
+        min_conf = 75 if regime == "BEAR" else 65
+        if conf >= min_conf:
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "LONG", b_long[0], conf, reason)
             if s: results.append(s)
 
@@ -605,36 +664,45 @@ def analyze(ticker, sector, market_state, regime):
         for p in bear_charts:
             if p[0] in ["Head & Shoulders", "Double Top", "Rising Wedge"]: b_short = p; break
 
-    if b_short and price < ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03:
+    if b_short and price < ema20 and vol_now > vol_avg * 1.2 and atr_pct < 0.03 and rsi_valid_short(rsi):
         conf = 55 + int(b_short[1] * 0.35)
         if regime == "BEAR": conf += 10
+        if regime == "BULL": conf -= 15
         if market_state == "CALM": conf += 5
-        reason = [f"Pattern: {b_short[0]}", f"Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
-        if conf >= 65:
+        reason = [f"Pattern: {b_short[0]}", "Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
+        min_conf = 75 if regime == "BULL" else 65
+        if conf >= min_conf:
             s = make_signal("B", "🟠 Signal B — HAKEM Method", "SHORT", b_short[0], conf, reason)
             if s: results.append(s)
 
-    if all_bull and price > ema20 and vol_now > vol_avg * 1.2:
+    # ════════════════════════════════
+    # TRACK C
+    # ════════════════════════════════
+    if all_bull and price > ema20 and vol_now > vol_avg * 1.2 and rsi_valid_long(rsi):
         top = max(all_bull, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
         if regime == "BULL": conf += 8
+        if regime == "BEAR": conf -= 15
         if market_state == "CALM": conf += 5
         if rsi < 60: conf += 5
         if price > support * 1.005: conf += 5
-        reason = [f"Pattern: {top[0]}", f"Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
-        if conf >= 65:
+        reason = [f"Pattern: {top[0]}", "Price > EMA20", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
+        min_conf = 75 if regime == "BEAR" else 65
+        if conf >= min_conf:
             s = make_signal("C", "🟣 Signal C — Combined", "LONG", top[0], conf, reason)
             if s: results.append(s)
 
-    if all_bear and price < ema20 and vol_now > vol_avg * 1.2:
+    if all_bear and price < ema20 and vol_now > vol_avg * 1.2 and rsi_valid_short(rsi):
         top = max(all_bear, key=lambda x: x[1])
         conf = 55 + int(top[1] * 0.35)
         if regime == "BEAR": conf += 8
+        if regime == "BULL": conf -= 15
         if market_state == "CALM": conf += 5
         if rsi > 40: conf += 5
         if price < resistance * 0.995: conf += 5
-        reason = [f"Pattern: {top[0]}", f"Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%"]
-        if conf >= 65:
+        reason = [f"Pattern: {top[0]}", "Price < EMA20", f"Volume {int(vol_now/vol_avg*100)}%", f"RSI: {round(rsi,1)}"]
+        min_conf = 75 if regime == "BULL" else 65
+        if conf >= min_conf:
             s = make_signal("C", "🟣 Signal C — Combined", "SHORT", top[0], conf, reason)
             if s: results.append(s)
 
@@ -645,7 +713,7 @@ def analyze(ticker, sector, market_state, regime):
 # ACTION DECISION
 # ─────────────────────────────────────────
 
-def get_action(signal):
+def get_action(signal, regime):
     score = 0
     reasons = []
     if signal["confidence"] >= 80:
@@ -658,7 +726,11 @@ def get_action(signal):
         reasons.append("R/R below 1:2")
     if signal["track"] in ["B", "C"]:
         score += 1
-    if score == 3:
+    if regime == "BEAR" and signal["direction"] == "LONG":
+        score -= 1
+    if regime == "BULL" and signal["direction"] == "SHORT":
+        score -= 1
+    if score >= 3:
         return "🚀 ACTION: ENTER NOW", None
     elif score == 2:
         return "⚡ ACTION: CONSIDER", reasons
@@ -672,7 +744,7 @@ def get_action(signal):
 
 def send_signal(s, regime):
     opt = get_options_data(s["ticker"], s["direction"])
-    action, action_reasons = get_action(s)
+    action, action_reasons = get_action(s, regime)
     regime_icon = "🟢 Bull" if regime == "BULL" else "🔴 Bear"
     state_icon = "😌 Calm" if s["market_state"] == "CALM" else "⚡ Volatile"
     direction_icon = "📈 LONG" if s["direction"] == "LONG" else "📉 SHORT"
@@ -685,6 +757,7 @@ def send_signal(s, regime):
 
 {direction_icon}  |  {regime_icon}  |  {state_icon}
 🕯️ Pattern: {s['pattern']}
+📊 RSI: {s.get('rsi', '-')}
 
 """
     for r in s["reason"]:
@@ -744,29 +817,77 @@ OI       ▸  {opt['oi']:,}
 ━━━━━━━━━━━━━━━━━━━━━━━"""
 
     telegram_send(msg)
-    log_us_signal(s, regime, s["market_state"], action)
+    log_signal(s, regime, s["market_state"], action)
     print(f"Sent: {s['ticker']} {s['direction']} Track {s['track']} — {action}")
+
+
+# ─────────────────────────────────────────
+# ✅ تقرير نهاية اليوم
+# ─────────────────────────────────────────
+
+def send_daily_report(signals_sent, regime, market_state):
+    ny = pytz.timezone("America/New_York")
+    now = datetime.now(ny).strftime("%Y-%m-%d")
+    regime_icon = "🟢 Bull" if regime == "BULL" else "🔴 Bear"
+    state_icon = "😌 Calm" if market_state == "CALM" else "⚡ Volatile"
+
+    if signals_sent:
+        lines = "\n".join([
+            f"  • {s['ticker']} [{s['track']}] {s['direction']} — {s['confidence']} — {s['pattern']}"
+            for s in signals_sent
+        ])
+        confs = [s["confidence"] for s in signals_sent]
+        avg_conf = round(sum(confs) / len(confs), 1)
+        msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
+📋 US Daily Report
+━━━━━━━━━━━━━━━━━━━━━━━
+📅 {now}
+Market: {regime_icon} | {state_icon}
+
+✅ Signals today: {len(signals_sent)}
+📊 Avg confidence: {avg_conf}
+
+{lines}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+        📡 HAKEM CONSULTING
+━━━━━━━━━━━━━━━━━━━━━━━"""
+    else:
+        msg = f"""━━━━━━━━━━━━━━━━━━━━━━━
+📋 US Daily Report
+━━━━━━━━━━━━━━━━━━━━━━━
+📅 {now}
+Market: {regime_icon} | {state_icon}
+
+📭 No signals today
+System running normally ✅
+
+━━━━━━━━━━━━━━━━━━━━━━━
+        📡 HAKEM CONSULTING
+━━━━━━━━━━━━━━━━━━━━━━━"""
+
+    telegram_send(msg)
 
 
 # ─────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────
 
-def run():
+def run(is_final_run=False):
     try:
         if not is_market_open():
-            print("السوق مغلق")
+            if is_final_run:
+                market_state, regime = get_market_state()
+                send_daily_report([], regime, market_state)
+            print("Market closed")
             return
 
         market_state, regime = get_market_state()
         print(f"Market: {market_state} | Regime: {regime}")
 
-        best_a_long = None
-        best_a_short = None
-        best_b_long = None
-        best_b_short = None
-        best_c_long = None
-        best_c_short = None
+        best_a_long = best_a_short = None
+        best_b_long = best_b_short = None
+        best_c_long = best_c_short = None
 
         for sector, tickers in WATCHLIST.items():
             for ticker in tickers:
@@ -798,27 +919,33 @@ def run():
                 except Exception as e:
                     print(f"Error {ticker}: {e}")
 
-        sent = False
+        signals_sent = []
         for signal in [best_a_long, best_a_short, best_b_long, best_b_short, best_c_long, best_c_short]:
             if signal:
                 send_signal(signal, regime)
-                sent = True
+                signals_sent.append(signal)
 
-        if sent:
+        if signals_sent:
             telegram_send("✅ System OK — Signals Sent 🇺🇸")
+            print("Signals sent successfully")
         else:
-            telegram_send("📭 🇺🇸 اليوم: لا توجد إشارات أمريكية\nالنظام عمل بشكل طبيعي ✅")
+            print("No signals today")
+
+        if is_final_run:
+            send_daily_report(signals_sent, regime, market_state)
 
     except Exception as e:
-        telegram_send(f"""━━━━━━━━━━━━━━━━━━━━━━━
-❌ HAKEM US ERROR
-━━━━━━━━━━━━━━━━━━━━━━━
-
-{str(e)}
-
-━━━━━━━━━━━━━━━━━━━━━━━""")
+        telegram_send(
+            "━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "❌ HAKEM US ERROR\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{str(e)}\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━"
+        )
         print(f"FATAL ERROR: {e}")
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    final = "--final" in sys.argv
+    run(is_final_run=final)
