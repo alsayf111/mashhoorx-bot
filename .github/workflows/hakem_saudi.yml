@@ -22,7 +22,13 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python hakem_saudi.py
+        run: |
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "13" ]; then
+            python hakem_saudi.py --final
+          else
+            python hakem_saudi.py
+          fi
       - name: Notify on failure
         if: failure()
         run: |
