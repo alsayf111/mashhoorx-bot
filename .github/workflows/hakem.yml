@@ -22,7 +22,14 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python hakem_agent.py
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: |
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "21" ]; then
+            python hakem_agent.py --final
+          else
+            python hakem_agent.py
+          fi
       - name: Notify on failure
         if: failure()
         run: |
